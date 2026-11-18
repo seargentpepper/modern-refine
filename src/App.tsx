@@ -1,11 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import {
-  Archive,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   CalendarCheck,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Columns3,
   Download,
+  EyeOff,
   FileSpreadsheet,
   Filter,
   FolderInput,
@@ -16,6 +21,7 @@ import {
   Trash2,
   Undo2,
   Upload,
+  X,
 } from "lucide-react";
 import { ROOT_CSV_TEMPLATES } from "./data/csvTemplates";
 import {
@@ -23,28 +29,21 @@ import {
   computeColumnDiagnostic,
   computeFacets,
   isLikelyDateColumn,
+  parseCalendarDate,
   parseCsvText,
   replayRecipeWithTrash,
   serializeCsv,
 } from "./lib/refineEngine";
+import { saveFileWithDialogBridge } from "./lib/tauriBridge";
 import type {
   ClusterMethod,
   DataRow,
   DateTargetFormat,
   FileIngestionMeta,
   RefineStep,
+  TableSession,
   TransformKind,
 } from "./types/refine";
-
-function downloadTextFile(filename: string, content: string, mimeType: string) {
-  const blob = new Blob([content], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
 
 const DATE_FORMAT_LABELS: Record<DateTargetFormat, string> = {
   iso: "ISO AAAA-MM-DD (ej. 2025-01-14)",
@@ -56,34 +55,72 @@ const DATE_FORMAT_LABELS: Record<DateTargetFormat, string> = {
   spanish_long: "Largo (14 de enero de 2025)",
 };
 
+function parseSortableNumber(raw: string): number | null {
+  const cleaned = raw.trim().replace(/[$,\s]/g, "");
+  if (!cleaned || !/^-?\d+(\.\d+)?$/.test(cleaned)) return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
+function compareCellValues(a: string, b: string, isDateCol: boolean): number {
+  const trimA = a.trim();
+  const trimB = b.trim();
+  if (!trimA && !trimB) return 0;
+  if (!trimA) return 1;
+  if (!trimB) return -1;
+
+  if (isDateCol) {
+    const dA = parseCalendarDate(trimA, true);
+    const dB = parseCalendarDate(trimB, true);
+    if (dA && dB) {
+      const tA = Date.UTC(dA.year, dA.month - 1, dA.day);
+      const tB = Date.UTC(dB.year, dB.month - 1, dB.day);
+      if (tA !== tB) return tA - tB;
+    }
+  }
+
+  const numA = parseSortableNumber(trimA);
+  const numB = parseSortableNumber(trimB);
+  if (numA !== null && numB !== null && numA !== numB) {
+    return numA - numB;
+  }
+
+  return trimA.localeCompare(trimB, "es", { numeric: true, sensitivity: "base" });
+}
+
+interface StepAccordionGroup {
+  key: string;
+  title: string;
+  steps: Array<{ step: RefineStep; globalIndex: number }>;
+}
+
 export default function App() {
-  const [fileName, setFileName] = useState<string>("");
-  const [columns, setColumns] = useState<string[]>([]);
-  const [baseRows, setBaseRows] = useState<DataRow[]>([]);
-  const [ingestionMeta, setIngestionMeta] = useState<FileIngestionMeta | null>(null);
-  const [workbookRef, setWorkbookRef] = useState<XLSX.WorkBook | null>(null);
+  // Modelo de Sesiones Independientes (Multi-Pestaña / Multi-Archivo)
+  const [sessions, setSessions] = useState<TableSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const workbooksMapRef = useRef<Map<string, XLSX.WorkBook>>(new Map());
+
   const [clusterMethodFilter, setClusterMethodFilter] = useState<ClusterMethod | "ALL">("ALL");
-
-  const [steps, setSteps] = useState<RefineStep[]>([]);
-  const [redoStack, setRedoStack] = useState<RefineStep[]>([]);
-
-  const [selectedColumn, setSelectedColumn] = useState<string>("");
-  const [selectionMode, setSelectionMode] = useState<"column" | "cell">("column");
   const [dateFormat, setDateFormat] = useState<DateTargetFormat>("iso");
+
+  // Menús desplegables (Recetas / Exportar / Estructura de Columna)
+  const [openMenu, setOpenMenu] = useState<"recipes" | "export" | "col_ops" | null>(null);
+  const [isRenamingCol, setIsRenamingCol] = useState(false);
+  const [renameColDraft, setRenameColDraft] = useState("");
+
+  // Acordeones colapsados en el Historial
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  // Paginación virtualizada para tablas masivas (>100 filas)
+  const [pageBySession, setPageBySession] = useState<Record<string, number>>({});
+  const PAGE_SIZE = 100;
 
   const [leftTab, setLeftTab] = useState<"facets" | "clusters">("clusters");
   const [rightTab, setRightTab] = useState<"history" | "trash" | "recipe">("history");
 
-  const [facetFilter, setFacetFilter] = useState<string | null>(null);
-  const [filterAlias, setFilterAlias] = useState<string>("");
   const [isEditingFilterAlias, setIsEditingFilterAlias] = useState(false);
-
   const [renamingFacetValue, setRenamingFacetValue] = useState<string | null>(null);
   const [renameFacetDraft, setRenameFacetDraft] = useState<string>("");
 
-  const [selectedCell, setSelectedCell] = useState<{ visibleIdx: number; colIdx: number } | null>(
-    null
-  );
   const [editingCell, setEditingCell] = useState<{ origIdx: number; col: string } | null>(null);
   const [editDraft, setEditDraft] = useState("");
 
@@ -94,13 +131,42 @@ export default function App() {
   const recipeInputRef = useRef<HTMLInputElement | null>(null);
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
 
-  const hasData = columns.length > 0;
-
-  const { activeRows, trash } = useMemo(
-    () => replayRecipeWithTrash(baseRows, steps),
-    [baseRows, steps]
+  const activeSession = useMemo(
+    () => sessions.find((s) => s.id === activeSessionId) ?? sessions[0] ?? null,
+    [sessions, activeSessionId]
   );
 
+  const updateActiveSession = useCallback(
+    (updater: (prev: TableSession) => TableSession) => {
+      setSessions((prev) => {
+        const targetId = activeSessionId ?? prev[0]?.id;
+        if (!targetId) return prev;
+        return prev.map((s) => (s.id === targetId ? updater(s) : s));
+      });
+    },
+    [activeSessionId]
+  );
+
+  const fileName = activeSession?.fileName ?? "";
+  const baseColumns = activeSession?.baseColumns ?? [];
+  const baseRows = activeSession?.baseRows ?? [];
+  const ingestionMeta = activeSession?.ingestionMeta ?? null;
+  const steps = activeSession?.steps ?? [];
+  const redoStack = activeSession?.redoStack ?? [];
+  const selectedColumn = activeSession?.selectedColumn ?? "";
+  const selectionMode = activeSession?.selectionMode ?? "column";
+  const sortState = activeSession?.sortState ?? null;
+  const facetFilter = activeSession?.facetFilter ?? null;
+  const filterAlias = activeSession?.filterAlias ?? "";
+  const selectedCell = activeSession?.selectedCell ?? null;
+  const workbookRef = activeSession ? workbooksMapRef.current.get(activeSession.id) ?? null : null;
+
+  const { columns, hiddenColumns, activeRows, trash } = useMemo(
+    () => replayRecipeWithTrash(baseRows, steps, baseColumns),
+    [baseRows, steps, baseColumns]
+  );
+
+  const hasData = Boolean(activeSession && columns.length > 0);
   const currentDataRows = useMemo(() => activeRows.map((r) => r.data), [activeRows]);
   const activeColumn = columns.includes(selectedColumn) ? selectedColumn : columns[0] ?? "";
 
@@ -124,7 +190,6 @@ export default function App() {
     [activeColumn, currentDataRows]
   );
 
-  // Cuando la columna no tiene clústeres (ej. columna de fechas), mostrar Facetas automáticamente
   useEffect(() => {
     if (clusters.length === 0 && facets.length > 0) {
       setLeftTab("facets");
@@ -134,107 +199,297 @@ export default function App() {
   }, [activeColumn, clusters.length, facets.length]);
 
   const visibleRows = useMemo(() => {
-    if (facetFilter === null || !activeColumn) return activeRows;
-    return activeRows.filter((item) => (item.data[activeColumn] ?? "") === facetFilter);
-  }, [activeRows, facetFilter, activeColumn]);
+    const filtered =
+      facetFilter === null || !activeColumn
+        ? activeRows
+        : activeRows.filter((item) => (item.data[activeColumn] ?? "") === facetFilter);
 
-  const handleClearSession = () => {
-    setFileName("");
-    setColumns([]);
-    setBaseRows([]);
-    setIngestionMeta(null);
-    setWorkbookRef(null);
-    setSteps([]);
-    setRedoStack([]);
-    setSelectedColumn("");
-    setFacetFilter(null);
-    setFilterAlias("");
-    setSelectedCell(null);
+    if (!sortState || !columns.includes(sortState.column)) return filtered;
+    const sortCol = sortState.column;
+    const colIsDate = isLikelyDateColumn(sortCol, currentDataRows);
+
+    return [...filtered].sort((a, b) => {
+      const valA = a.data[sortCol] ?? "";
+      const valB = b.data[sortCol] ?? "";
+      const trimA = valA.trim();
+      const trimB = valB.trim();
+      if (!trimA && !trimB) return a.origIdx - b.origIdx;
+      if (!trimA) return 1;
+      if (!trimB) return -1;
+      const cmp = compareCellValues(valA, valB, colIsDate);
+      return sortState.dir === "asc" ? cmp : -cmp;
+    });
+  }, [activeRows, facetFilter, activeColumn, sortState, columns, currentDataRows]);
+
+  const totalPages = Math.max(1, Math.ceil(visibleRows.length / PAGE_SIZE));
+  const currentPage = Math.min(
+    totalPages - 1,
+    Math.max(0, activeSession ? pageBySession[activeSession.id] ?? 0 : 0)
+  );
+  const pageOffset = currentPage * PAGE_SIZE;
+  const pagedRows = useMemo(
+    () => visibleRows.slice(pageOffset, pageOffset + PAGE_SIZE),
+    [visibleRows, pageOffset]
+  );
+
+  // Agrupación del Historial en Acordeones por Columna / Tarea
+  const stepAccordionGroups = useMemo<StepAccordionGroup[]>(() => {
+    const groupsMap = new Map<string, StepAccordionGroup>();
+    steps.forEach((step, idx) => {
+      const isRowTask =
+        step.kind === "delete_row" ||
+        step.kind === "delete_empty_rows" ||
+        step.kind === "restore_rows";
+      const key = isRowTask ? "__rows__" : `col_${step.column}`;
+      const title = isRowTask ? "Depuración de filas" : `Columna: ${step.column}`;
+      const existing = groupsMap.get(key);
+      if (existing) {
+        existing.steps.push({ step, globalIndex: idx });
+      } else {
+        groupsMap.set(key, {
+          key,
+          title,
+          steps: [{ step, globalIndex: idx }],
+        });
+      }
+    });
+    return Array.from(groupsMap.values());
+  }, [steps]);
+
+  const cleanTableName = useMemo(
+    () => fileName.replace(/\.(csv|tsv|txt|xlsx|xls|ods|json)$/i, "") || "tabla_sin_nombre",
+    [fileName]
+  );
+
+  const recipeJson = useMemo(
+    () =>
+      JSON.stringify(
+        {
+          schema: "modern-refine/v1",
+          tableName: cleanTableName,
+          sourceFile: fileName,
+          activeSheet: ingestionMeta?.activeSheet ?? null,
+          generatedAt: new Date().toISOString(),
+          steps: steps.map(({ enabled, kind, column, label, params }) => ({
+            enabled,
+            kind,
+            column,
+            label,
+            params,
+          })),
+        },
+        null,
+        2
+      ),
+    [cleanTableName, fileName, ingestionMeta, steps]
+  );
+
+  const openOrActivateSession = (
+    name: string,
+    cols: string[],
+    rows: DataRow[],
+    meta: FileIngestionMeta,
+    wb?: XLSX.WorkBook
+  ) => {
+    if (cols.length === 0) return;
+    const id = `session_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    if (wb) {
+      workbooksMapRef.current.set(id, wb);
+    }
+    const newSession: TableSession = {
+      id,
+      fileName: name,
+      baseColumns: cols,
+      baseRows: rows,
+      ingestionMeta: meta,
+      steps: [],
+      redoStack: [],
+      selectedColumn: cols[0],
+      selectionMode: "column",
+      sortState: null,
+      facetFilter: null,
+      filterAlias: "",
+      selectedCell: rows.length > 0 ? { visibleIdx: 0, colIdx: 0 } : null,
+    };
+    setSessions((prev) => [...prev, newSession]);
+    setActiveSessionId(id);
     setEditingCell(null);
-    setClusterTargets({});
-    setClusterUnchecked({});
+    setIsRenamingCol(false);
     setClusterMethodFilter("ALL");
   };
 
+  const handleCloseSession = useCallback(
+    (targetId?: string) => {
+      const idToClose = targetId ?? activeSession?.id;
+      if (!idToClose) return;
+      workbooksMapRef.current.delete(idToClose);
+      setSessions((prev) => {
+        const idx = prev.findIndex((s) => s.id === idToClose);
+        if (idx === -1) return prev;
+        const next = prev.filter((s) => s.id !== idToClose);
+        if (activeSessionId === idToClose) {
+          const fallback = next[Math.min(idx, next.length - 1)] ?? null;
+          setActiveSessionId(fallback ? fallback.id : null);
+        }
+        return next;
+      });
+      setEditingCell(null);
+      setIsRenamingCol(false);
+    },
+    [activeSession?.id, activeSessionId]
+  );
+
   const loadCsvIntoSession = (name: string, rawText: string) => {
+    // Si ya existe una pestaña con ese mismo nombre exacto, preguntar/activar o abrir pestaña
     const parsed = parseCsvText(rawText);
     if (parsed.columns.length === 0) return;
-    setFileName(name);
-    setColumns(parsed.columns);
-    setBaseRows(parsed.rows);
-    setIngestionMeta(parsed.meta);
-    setWorkbookRef(null);
-    setSteps([]);
-    setRedoStack([]);
-    setSelectedColumn(parsed.columns[0]);
-    setSelectionMode("column");
-    setFacetFilter(null);
-    setFilterAlias("");
-    setSelectedCell(parsed.rows.length > 0 ? { visibleIdx: 0, colIdx: 0 } : null);
-    setEditingCell(null);
-    setClusterTargets({});
-    setClusterUnchecked({});
-    setClusterMethodFilter("ALL");
+    openOrActivateSession(name, parsed.columns, parsed.rows, parsed.meta);
   };
 
   const loadWorkbookSheetIntoSession = (
     name: string,
     wb: XLSX.WorkBook,
-    sheetName: string
+    sheetName: string,
+    replaceCurrentTab = false
   ) => {
     const sheet = wb.Sheets[sheetName];
     if (!sheet) return;
     const csvText = XLSX.utils.sheet_to_csv(sheet);
     const parsed = parseCsvText(csvText);
     if (parsed.columns.length === 0) return;
-    setFileName(name);
-    setColumns(parsed.columns);
-    setBaseRows(parsed.rows);
-    setWorkbookRef(wb);
-    setIngestionMeta({
-      delimiterLabel: `Excel (${sheetName})`,
+    const meta: FileIngestionMeta = {
+      delimiterLabel: `Hoja: ${sheetName}`,
       dedupedHeaders: parsed.meta.dedupedHeaders,
       sheets: wb.SheetNames,
       activeSheet: sheetName,
-    });
-    setSteps([]);
-    setRedoStack([]);
-    setSelectedColumn(parsed.columns[0]);
-    setSelectionMode("column");
-    setFacetFilter(null);
-    setFilterAlias("");
-    setSelectedCell(parsed.rows.length > 0 ? { visibleIdx: 0, colIdx: 0 } : null);
-    setEditingCell(null);
-    setClusterTargets({});
-    setClusterUnchecked({});
-    setClusterMethodFilter("ALL");
+    };
+
+    if (replaceCurrentTab && activeSession) {
+      workbooksMapRef.current.set(activeSession.id, wb);
+      updateActiveSession((s) => ({
+        ...s,
+        baseColumns: parsed.columns,
+        baseRows: parsed.rows,
+        ingestionMeta: meta,
+        steps: [],
+        redoStack: [],
+        selectedColumn: parsed.columns[0],
+        selectionMode: "column",
+        sortState: null,
+        facetFilter: null,
+        filterAlias: "",
+        selectedCell: parsed.rows.length > 0 ? { visibleIdx: 0, colIdx: 0 } : null,
+      }));
+    } else {
+      openOrActivateSession(name, parsed.columns, parsed.rows, meta, wb);
+    }
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (/\.(xlsx|xls|ods)$/i.test(file.name)) {
-      const buf = await file.arrayBuffer();
-      const wb = XLSX.read(buf, { type: "array", raw: false });
-      const firstSheet = wb.SheetNames[0];
-      if (firstSheet) {
-        loadWorkbookSheetIntoSession(file.name, wb, firstSheet);
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    for (const file of Array.from(files)) {
+      if (/\.(xlsx|xls|ods)$/i.test(file.name)) {
+        const buf = await file.arrayBuffer();
+        const wb = XLSX.read(buf, { type: "array", raw: false });
+        const firstSheet = wb.SheetNames[0];
+        if (firstSheet) {
+          loadWorkbookSheetIntoSession(file.name, wb, firstSheet, false);
+        }
+      } else if (/\.json$/i.test(file.name)) {
+        const text = await file.text();
+        try {
+          const parsedJson = JSON.parse(text);
+          const arr = Array.isArray(parsedJson)
+            ? parsedJson
+            : Array.isArray(parsedJson?.data)
+              ? parsedJson.data
+              : null;
+          if (arr && arr.length > 0 && typeof arr[0] === "object") {
+            const cols = Array.from(
+              new Set<string>(
+                arr.flatMap((obj: Record<string, unknown>) => Object.keys(obj ?? {}))
+              )
+            );
+            const rows: DataRow[] = arr.map((obj: Record<string, unknown>) => {
+              const r: DataRow = {};
+              for (const c of cols) r[c] = obj?.[c] == null ? "" : String(obj[c]);
+              return r;
+            });
+            openOrActivateSession(file.name, cols, rows, {
+              delimiterLabel: "JSON",
+              dedupedHeaders: 0,
+            });
+          }
+        } catch {
+          // Ignorar JSON inválido
+        }
+      } else {
+        const text = await file.text();
+        loadCsvIntoSession(file.name, text);
       }
-    } else {
-      const text = await file.text();
-      loadCsvIntoSession(file.name, text);
     }
     e.target.value = "";
   };
 
-  const handleExportXlsx = () => {
+  const handleSaveRecipe = useCallback(async () => {
     if (!hasData) return;
-    const ws = XLSX.utils.json_to_sheet(currentDataRows, { header: columns });
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, ingestionMeta?.activeSheet ?? "Limpio");
-    const outName = fileName.replace(/\.(csv|tsv|xlsx|xls|ods)$/i, "") + "_limpio.xlsx";
-    XLSX.writeFile(wb, outName);
-  };
+    setOpenMenu(null);
+    try {
+      await saveFileWithDialogBridge({
+        defaultName: `${cleanTableName}.refine.json`,
+        filterName: "Receta ModernRefine (*.refine.json)",
+        extensions: ["json"],
+        data: recipeJson,
+        mimeType: "application/json",
+      });
+    } catch (err) {
+      console.error("Error al guardar receta:", err);
+    }
+  }, [hasData, cleanTableName, recipeJson]);
+
+  const handleExportCsv = useCallback(async () => {
+    if (!hasData) return;
+    setOpenMenu(null);
+    try {
+      const rowsToExport = visibleRows.map((r) => r.data);
+      await saveFileWithDialogBridge({
+        defaultName: `${cleanTableName}_limpio.csv`,
+        filterName: "Archivo CSV (*.csv)",
+        extensions: ["csv"],
+        data: serializeCsv(columns, rowsToExport),
+        mimeType: "text/csv;charset=utf-8",
+      });
+    } catch (err) {
+      console.error("Error al exportar CSV:", err);
+    }
+  }, [hasData, cleanTableName, columns, visibleRows]);
+
+  const handleExportXlsx = useCallback(async () => {
+    if (!hasData) return;
+    setOpenMenu(null);
+    try {
+      const rowsToExport = visibleRows.map((r) => r.data);
+      const ws = XLSX.utils.json_to_sheet(rowsToExport, { header: columns });
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, ingestionMeta?.activeSheet ?? "Limpio");
+      const xlsxBuffer = XLSX.write(wb, {
+        bookType: "xlsx",
+        type: "array",
+      }) as ArrayBuffer;
+      await saveFileWithDialogBridge({
+        defaultName: `${cleanTableName}_limpio.xlsx`,
+        filterName: "Libro de Excel (*.xlsx)",
+        extensions: ["xlsx"],
+        data: new Uint8Array(xlsxBuffer),
+        mimeType:
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+    } catch (err) {
+      console.error("Error al exportar XLSX:", err);
+    }
+  }, [hasData, cleanTableName, columns, visibleRows, ingestionMeta]);
 
   const handleLoadRecipe = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -254,39 +509,49 @@ export default function App() {
           label: String(s.label ?? `${s.kind} (${s.column})`),
           params: s.params,
         }));
-      setSteps(importedSteps);
-      setRedoStack([]);
-      setFacetFilter(null);
+      updateActiveSession((s) => ({
+        ...s,
+        steps: importedSteps,
+        redoStack: [],
+        facetFilter: null,
+      }));
       setRightTab("history");
     } finally {
       e.target.value = "";
+      setOpenMenu(null);
     }
   };
 
-  const pushStep = (
-    kind: TransformKind,
-    column: string,
-    label: string,
-    params?: Record<string, unknown>
-  ) => {
-    const step: RefineStep = {
-      id: `step_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      timestamp: new Date().toISOString(),
-      enabled: true,
-      kind,
-      column,
-      label,
-      params,
-    };
-    setSteps((prev) => [...prev, step]);
-    setRedoStack([]);
-    setFacetFilter(null);
-    setFilterAlias("");
-  };
+  const pushStep = useCallback(
+    (
+      kind: TransformKind,
+      column: string,
+      label: string,
+      params?: Record<string, unknown>
+    ) => {
+      const step: RefineStep = {
+        id: `step_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        timestamp: new Date().toISOString(),
+        enabled: true,
+        kind,
+        column,
+        label,
+        params,
+      };
+      updateActiveSession((s) => ({
+        ...s,
+        steps: [...s.steps, step],
+        redoStack: [],
+        facetFilter: null,
+        filterAlias: "",
+      }));
+    },
+    [updateActiveSession]
+  );
 
   const handleStandardizeWholeColumnDates = (fmt: DateTargetFormat = dateFormat) => {
     if (!activeColumn) return;
-    setSelectionMode("column");
+    updateActiveSession((s) => ({ ...s, selectionMode: "column" }));
     pushStep(
       "standardize_dates",
       activeColumn,
@@ -296,31 +561,206 @@ export default function App() {
   };
 
   const handleToggleStep = (stepId: string) => {
-    setSteps((prev) =>
-      prev.map((s) => (s.id === stepId ? { ...s, enabled: !s.enabled } : s))
-    );
-    setFacetFilter(null);
+    updateActiveSession((s) => ({
+      ...s,
+      steps: s.steps.map((st) => (st.id === stepId ? { ...st, enabled: !st.enabled } : st)),
+      facetFilter: null,
+    }));
+  };
+
+  const handleToggleGroupSteps = (groupStepIds: string[], enableAll: boolean) => {
+    const idSet = new Set(groupStepIds);
+    updateActiveSession((s) => ({
+      ...s,
+      steps: s.steps.map((st) => (idSet.has(st.id) ? { ...st, enabled: enableAll } : st)),
+      facetFilter: null,
+    }));
   };
 
   const handleDeleteStep = (stepId: string) => {
-    setSteps((prev) => prev.filter((s) => s.id !== stepId));
-    setFacetFilter(null);
+    updateActiveSession((s) => ({
+      ...s,
+      steps: s.steps.filter((st) => st.id !== stepId),
+      facetFilter: null,
+    }));
   };
 
-  const handleUndo = () => {
-    if (steps.length === 0) return;
-    const last = steps[steps.length - 1];
-    setSteps((prev) => prev.slice(0, -1));
-    setRedoStack((prev) => [last, ...prev]);
-    setFacetFilter(null);
+  const handleDeleteGroupSteps = (groupStepIds: string[]) => {
+    const idSet = new Set(groupStepIds);
+    updateActiveSession((s) => ({
+      ...s,
+      steps: s.steps.filter((st) => !idSet.has(st.id)),
+      facetFilter: null,
+    }));
   };
 
-  const handleRedo = () => {
-    if (redoStack.length === 0) return;
-    const [next, ...rest] = redoStack;
-    setSteps((prev) => [...prev, next]);
-    setRedoStack(rest);
-    setFacetFilter(null);
+  const handleUndo = useCallback(() => {
+    updateActiveSession((s) => {
+      if (s.steps.length === 0) return s;
+      const last = s.steps[s.steps.length - 1];
+      return {
+        ...s,
+        steps: s.steps.slice(0, -1),
+        redoStack: [last, ...s.redoStack],
+        facetFilter: null,
+      };
+    });
+  }, [updateActiveSession]);
+
+  const handleRedo = useCallback(() => {
+    updateActiveSession((s) => {
+      if (s.redoStack.length === 0) return s;
+      const [next, ...rest] = s.redoStack;
+      return {
+        ...s,
+        steps: [...s.steps, next],
+        redoStack: rest,
+        facetFilter: null,
+      };
+    });
+  }, [updateActiveSession]);
+
+  // Atajos globales de teclado
+  useEffect(() => {
+    const onGlobalKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      const isInput = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+
+      if (e.key === "Escape" && openMenu) {
+        setOpenMenu(null);
+        return;
+      }
+
+      if (e.altKey && !e.ctrlKey && !e.metaKey && !isInput) {
+        const altKey = e.key.toLowerCase();
+        if (altKey === "w") {
+          e.preventDefault();
+          if (hasData) handleCloseSession();
+          return;
+        }
+        if (hasData && activeColumn) {
+          if (altKey === "d") {
+            e.preventDefault();
+            pushStep("duplicate_column", activeColumn, `Duplicar columna "${activeColumn}"`, {
+              newColumnName: `${activeColumn}_Copia`,
+            });
+            return;
+          }
+          if (altKey === "r") {
+            e.preventDefault();
+            setRenameColDraft(activeColumn);
+            setIsRenamingCol(true);
+            return;
+          }
+          if (altKey === "x" && columns.length > 1) {
+            e.preventDefault();
+            pushStep("hide_column", activeColumn, `Ocultar columna "${activeColumn}"`);
+            return;
+          }
+          if (altKey === "2") {
+            e.preventDefault();
+            pushStep(
+              "split_into_two_columns",
+              activeColumn,
+              `Dividir "${activeColumn}" en 2 columnas (-)` ,
+              { separator: "-" }
+            );
+            return;
+          }
+          if (altKey === "i") {
+            e.preventDefault();
+            pushStep(
+              "split_keep_left",
+              activeColumn,
+              `Conservar izquierda antes de "-" (${activeColumn})`,
+              { separator: "-" }
+            );
+            return;
+          }
+          if (altKey === "u") {
+            e.preventDefault();
+            pushStep(
+              "split_keep_right",
+              activeColumn,
+              `Conservar derecha después de "-" (${activeColumn})`,
+              { separator: "-" }
+            );
+            return;
+          }
+          if (altKey === "n") {
+            e.preventDefault();
+            pushStep(
+              "split_mexican_name",
+              activeColumn,
+              `Separar "${activeColumn}" en Nombre(s), Apellido_Paterno y Apellido_Materno`
+            );
+            return;
+          }
+        }
+      }
+
+      if (!(e.ctrlKey || e.metaKey) || isInput) return;
+      const key = e.key.toLowerCase();
+
+      if (key === "z" && e.shiftKey) {
+        e.preventDefault();
+        handleRedo();
+      } else if (key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+      } else if (key === "y") {
+        e.preventDefault();
+        handleRedo();
+      } else if (key === "o" && !e.shiftKey) {
+        e.preventDefault();
+        fileInputRef.current?.click();
+      } else if (key === "o" && e.shiftKey) {
+        e.preventDefault();
+        if (hasData) recipeInputRef.current?.click();
+      } else if (key === "s" && !e.shiftKey) {
+        e.preventDefault();
+        handleSaveRecipe();
+      } else if (key === "e" && !e.shiftKey) {
+        e.preventDefault();
+        handleExportCsv();
+      } else if (key === "e" && e.shiftKey) {
+        e.preventDefault();
+        handleExportXlsx();
+      }
+    };
+
+    window.addEventListener("keydown", onGlobalKeyDown);
+    return () => window.removeEventListener("keydown", onGlobalKeyDown);
+  }, [
+    handleUndo,
+    handleRedo,
+    handleSaveRecipe,
+    handleExportCsv,
+    handleExportXlsx,
+    handleCloseSession,
+    pushStep,
+    hasData,
+    activeColumn,
+    columns.length,
+    openMenu,
+  ]);
+
+  useEffect(() => {
+    if (!openMenu) return;
+    const close = () => setOpenMenu(null);
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [openMenu]);
+
+  const handleToggleColumnSort = (col: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    updateActiveSession((s) => {
+      const prev = s.sortState;
+      let nextSort: TableSession["sortState"] = null;
+      if (!prev || prev.column !== col) nextSort = { column: col, dir: "asc" };
+      else if (prev.dir === "asc") nextSort = { column: col, dir: "desc" };
+      return { ...s, sortState: nextSort };
+    });
   };
 
   const handleMergeCluster = (clusterId: string, canonicalChoice: string, allVariants: string[]) => {
@@ -380,14 +820,15 @@ export default function App() {
     pushStep("delete_row", activeColumn, `Eliminar fila #${targetOrigIdx + 1}`, {
       origIdx: targetOrigIdx,
     });
-    setSelectedCell((prev) =>
-      prev
+    updateActiveSession((s) => ({
+      ...s,
+      selectedCell: s.selectedCell
         ? {
-            visibleIdx: Math.max(0, Math.min(prev.visibleIdx, visibleRows.length - 2)),
-            colIdx: prev.colIdx,
+            visibleIdx: Math.max(0, Math.min(s.selectedCell.visibleIdx, visibleRows.length - 2)),
+            colIdx: s.selectedCell.colIdx,
           }
-        : null
-    );
+        : null,
+    }));
   };
 
   const handleRestoreRows = (origIndices: number[], label: string) => {
@@ -421,7 +862,7 @@ export default function App() {
       const targetRow = visibleRows[current.visibleIdx];
       const targetCol = columns[current.colIdx];
       if (targetRow && targetCol) {
-        setSelectionMode("cell");
+        updateActiveSession((s) => ({ ...s, selectionMode: "cell" }));
         setEditingCell({ origIdx: targetRow.origIdx, col: targetCol });
         setEditDraft(targetRow.data[targetCol] ?? "");
       }
@@ -430,11 +871,17 @@ export default function App() {
       return;
     }
 
-    setSelectionMode("cell");
-    setSelectedCell({ visibleIdx: nextRow, colIdx: nextCol });
-    if (columns[nextCol]) {
-      setSelectedColumn(columns[nextCol]);
+    const targetPage = Math.floor(nextRow / PAGE_SIZE);
+    if (activeSession && targetPage !== currentPage) {
+      setPageBySession((p) => ({ ...p, [activeSession.id]: targetPage }));
     }
+
+    updateActiveSession((s) => ({
+      ...s,
+      selectionMode: "cell",
+      selectedCell: { visibleIdx: nextRow, colIdx: nextCol },
+      selectedColumn: columns[nextCol] ?? s.selectedColumn,
+    }));
   };
 
   useEffect(() => {
@@ -444,27 +891,6 @@ export default function App() {
     );
     cellEl?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [selectedCell, selectionMode]);
-
-  const recipeJson = useMemo(
-    () =>
-      JSON.stringify(
-        {
-          schema: "modern-refine/v1",
-          sourceFile: fileName,
-          generatedAt: new Date().toISOString(),
-          steps: steps.map(({ enabled, kind, column, label, params }) => ({
-            enabled,
-            kind,
-            column,
-            label,
-            params,
-          })),
-        },
-        null,
-        2
-      ),
-    [fileName, steps]
-  );
 
   const selectedRealRowIdx =
     selectionMode === "cell" && selectedCell && visibleRows[selectedCell.visibleIdx]
@@ -477,11 +903,20 @@ export default function App() {
       <header className="mr-topbar">
         <div className="mr-brand">
           <span className="mr-logo">
-            <Archive size={16} color="#60a5fa" />
+            <img src="/mR_harmonia_cutout.png" alt="ModernRefine" className="mr-logo-img" />
             ModernRefine
           </span>
           <span className="mr-badge">Estación ETL</span>
-          <span className="mr-file-pill">
+          <span
+            className="mr-file-pill"
+            title={
+              hasData
+                ? `${fileName} · ${currentDataRows.length} filas${
+                    ingestionMeta ? ` · ${ingestionMeta.delimiterLabel}` : ""
+                  }`
+                : "Sin archivo cargado"
+            }
+          >
             {hasData
               ? `${fileName} · ${currentDataRows.length} filas${
                   ingestionMeta ? ` · ${ingestionMeta.delimiterLabel}` : ""
@@ -491,12 +926,12 @@ export default function App() {
           {workbookRef && ingestionMeta?.sheets && ingestionMeta.sheets.length > 1 && (
             <select
               className="mr-date-select"
-              style={{ flex: "none", width: 145, height: 26 }}
+              style={{ flex: "none", width: 140, height: 26 }}
               value={ingestionMeta.activeSheet ?? ""}
               onChange={(e) =>
-                loadWorkbookSheetIntoSession(fileName, workbookRef, e.target.value)
+                loadWorkbookSheetIntoSession(fileName, workbookRef, e.target.value, true)
               }
-              title="Cambiar hoja de cálculo del archivo Excel"
+              title="Cambiar hoja de cálculo en la pestaña actual"
             >
               {ingestionMeta.sheets.map((sh) => (
                 <option key={sh} value={sh}>
@@ -511,7 +946,8 @@ export default function App() {
           <input
             ref={fileInputRef}
             type="file"
-            accept=".csv,.tsv,.xlsx,.xls,.ods,text/csv"
+            multiple
+            accept=".csv,.tsv,.txt,.xlsx,.xls,.ods,.json"
             style={{ display: "none" }}
             onChange={handleFileUpload}
           />
@@ -522,86 +958,122 @@ export default function App() {
             style={{ display: "none" }}
             onChange={handleLoadRecipe}
           />
-          <button className="mr-btn" onClick={() => fileInputRef.current?.click()}>
-            <Upload size={14} /> Abrir CSV
+          <button
+            className="mr-btn"
+            onClick={() => fileInputRef.current?.click()}
+            title="Abrir uno o varios archivos en pestañas independientes: CSV, TSV, Excel, ODS o JSON (Ctrl+O)"
+          >
+            <Upload size={14} /> Abrir
+          </button>
+
+          <button
+            className="mr-btn"
+            disabled={!hasData}
+            onClick={() => handleCloseSession()}
+            title="Cerrar pestaña de tabla activa (Alt+W)"
+          >
+            <X size={14} /> Cerrar
           </button>
 
           {ROOT_CSV_TEMPLATES.length > 0 && (
             <select
               className="mr-date-select"
-              style={{ flex: "none", width: 205, height: 28 }}
-              value={ROOT_CSV_TEMPLATES.some((t) => t.name === fileName) ? fileName : ""}
+              style={{ flex: "none", width: 185, height: 28 }}
+              value=""
               onChange={(e) => {
                 const val = e.target.value;
-                if (!val) {
-                  handleClearSession();
-                  return;
-                }
+                if (!val) return;
                 const tpl = ROOT_CSV_TEMPLATES.find((t) => t.name === val);
                 if (tpl) loadCsvIntoSession(tpl.name, tpl.content);
               }}
+              title="Abrir una plantilla de prueba en una nueva pestaña"
             >
-              <option value="">
-                {hasData
-                  ? "— Cerrar tabla (Inicio limpio) —"
-                  : `Plantillas CSV (${ROOT_CSV_TEMPLATES.length})`}
-              </option>
+              <option value="">+ Abrir Plantilla ({ROOT_CSV_TEMPLATES.length})</option>
               {ROOT_CSV_TEMPLATES.map((tpl) => (
                 <option key={tpl.name} value={tpl.name}>
-                  Plantilla: {tpl.name}
+                  {tpl.name}
                 </option>
               ))}
             </select>
           )}
 
-          <button className="mr-btn" onClick={handleUndo} disabled={steps.length === 0}>
-            <Undo2 size={14} /> Deshacer
-          </button>
-          <button className="mr-btn" onClick={handleRedo} disabled={redoStack.length === 0}>
-            <Redo2 size={14} /> Rehacer
-          </button>
-          <button
-            className="mr-btn"
-            disabled={!hasData}
-            onClick={() => recipeInputRef.current?.click()}
-            title="Cargar archivo .refine.json previo"
-          >
-            <FolderInput size={14} /> Cargar Receta
-          </button>
-          <button
-            className="mr-btn"
-            disabled={!hasData}
-            onClick={() =>
-              downloadTextFile(
-                fileName.replace(/\.csv$/i, "") + ".refine.json",
-                recipeJson,
-                "application/json"
-              )
-            }
-          >
-            <FileSpreadsheet size={14} /> Guardar Receta
-          </button>
-          <button
-            className="mr-btn mr-btn-primary"
-            disabled={!hasData}
-            onClick={() =>
-              downloadTextFile(
-                fileName.replace(/\.(csv|tsv|xlsx|xls|ods)$/i, "") + "_limpio.csv",
-                serializeCsv(columns, currentDataRows),
-                "text/csv;charset=utf-8"
-              )
-            }
-          >
-            <Download size={14} /> Exportar CSV
-          </button>
-          <button
-            className="mr-btn"
-            disabled={!hasData}
-            onClick={handleExportXlsx}
-            title="Exportar directamente como libro Excel (.xlsx)"
-          >
-            <FileSpreadsheet size={14} /> Exportar XLSX
-          </button>
+          {/* Menú desplegable de Recetas */}
+          <div className="mr-dropdown" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="mr-btn"
+              disabled={!hasData}
+              onClick={() => setOpenMenu(openMenu === "recipes" ? null : "recipes")}
+              title="Cargar (Ctrl+Shift+O) o Guardar (Ctrl+S) recetas de transformación (.refine.json)"
+            >
+              <FileSpreadsheet size={14} /> Recetas <ChevronDown size={13} />
+            </button>
+            {openMenu === "recipes" && (
+              <div className="mr-dropdown-menu">
+                <button
+                  className="mr-dropdown-item"
+                  onClick={() => recipeInputRef.current?.click()}
+                  title="Cargar archivo de receta previo en la tabla activa (Ctrl+Shift+O)"
+                >
+                  <span>
+                    <FolderInput size={13} style={{ verticalAlign: "middle", marginRight: 6 }} />
+                    Cargar Receta (.json)
+                  </span>
+                </button>
+                <button
+                  className="mr-dropdown-item"
+                  onClick={handleSaveRecipe}
+                  title={`Guardar receta para "${cleanTableName}" (Ctrl+S)`}
+                >
+                  <span>
+                    <FileSpreadsheet
+                      size={13}
+                      style={{ verticalAlign: "middle", marginRight: 6 }}
+                    />
+                    Guardar "{cleanTableName}.refine.json"
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Menú desplegable de Exportar */}
+          <div className="mr-dropdown" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="mr-btn mr-btn-primary"
+              disabled={!hasData}
+              onClick={() => setOpenMenu(openMenu === "export" ? null : "export")}
+              title="Exportar tabla activa en Excel (Ctrl+Shift+E) o CSV (Ctrl+E)"
+            >
+              <Download size={14} /> Exportar <ChevronDown size={13} />
+            </button>
+            {openMenu === "export" && (
+              <div className="mr-dropdown-menu">
+                <button
+                  className="mr-dropdown-item"
+                  onClick={handleExportXlsx}
+                  title="Exportar como libro Excel .xlsx (Ctrl+Shift+E)"
+                >
+                  <span>
+                    <FileSpreadsheet
+                      size={13}
+                      style={{ verticalAlign: "middle", marginRight: 6 }}
+                    />
+                    Exportar en Excel (.xlsx)
+                  </span>
+                </button>
+                <button
+                  className="mr-dropdown-item"
+                  onClick={handleExportCsv}
+                  title="Exportar como archivo .csv (Ctrl+E)"
+                >
+                  <span>
+                    <Download size={13} style={{ verticalAlign: "middle", marginRight: 6 }} />
+                    Exportar en CSV (.csv)
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -619,7 +1091,8 @@ export default function App() {
           <div className="mr-scroll">
             {!hasData ? (
               <div style={{ color: "var(--text-dim)", fontSize: 12, padding: "12px 4px" }}>
-                Abre un archivo CSV o elige una plantilla de la raíz para analizar sus facetas.
+                Abre uno o varios archivos o elige una plantilla de la raíz para analizar sus
+                facetas.
               </div>
             ) : (
               <>
@@ -627,10 +1100,14 @@ export default function App() {
                   className="mr-col-select"
                   value={activeColumn}
                   onChange={(e) => {
-                    setSelectedColumn(e.target.value);
-                    setSelectionMode("column");
-                    setFacetFilter(null);
-                    setFilterAlias("");
+                    const col = e.target.value;
+                    updateActiveSession((s) => ({
+                      ...s,
+                      selectedColumn: col,
+                      selectionMode: "column",
+                      facetFilter: null,
+                      filterAlias: "",
+                    }));
                   }}
                 >
                   {columns.map((col) => (
@@ -679,7 +1156,6 @@ export default function App() {
                   </button>
                 </div>
 
-                {/* Controles de Texto y Limpieza en 1 Clic sobre toda la columna */}
                 <div className="mr-quick-ops">
                   <button
                     className="mr-op-btn"
@@ -743,7 +1219,11 @@ export default function App() {
                   <button
                     className="mr-op-btn"
                     onClick={() =>
-                      pushStep("extract_numbers", activeColumn, `Extraer solo números (${activeColumn})`)
+                      pushStep(
+                        "extract_numbers",
+                        activeColumn,
+                        `Extraer solo números (${activeColumn})`
+                      )
                     }
                     title="Limpia símbolos de moneda, paréntesis o texto dejando solo dígitos"
                   >
@@ -762,20 +1242,6 @@ export default function App() {
                   >
                     CP 5 dígitos (0...)
                   </button>
-                  <button
-                    className="mr-op-btn"
-                    onClick={() =>
-                      pushStep(
-                        "split_keep_left",
-                        activeColumn,
-                        `Separar por "-" (conservar izquierda en ${activeColumn})`,
-                        { separator: "-" }
-                      )
-                    }
-                    title="Conserva la parte izquierda antes del guion"
-                  >
-                    Separar izq (-)
-                  </button>
                   {diagnostic && diagnostic.emptyCount > 0 && (
                     <button
                       className="mr-op-btn mr-op-btn-danger"
@@ -790,9 +1256,181 @@ export default function App() {
                       Eliminar filas vacías ({diagnostic.emptyCount})
                     </button>
                   )}
+
+                  {/* Menú de ancho completo para Estructura, División, Nombres y Ocultar Columna */}
+                  <div className="mr-col-dropdown" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      className="mr-col-dropdown-trigger"
+                      onClick={() => setOpenMenu(openMenu === "col_ops" ? null : "col_ops")}
+                      title="Opciones para duplicar, renombrar, dividir o desaparecer esta columna"
+                    >
+                      <span>
+                        <Columns3 size={13} style={{ verticalAlign: "middle", marginRight: 6 }} />
+                        Estructura y División de Columna
+                      </span>
+                      <ChevronDown size={14} />
+                    </button>
+                    {openMenu === "col_ops" && (
+                      <div className="mr-col-dropdown-panel">
+                        <button
+                          className="mr-dropdown-item"
+                          title="Crea una copia exacta de esta columna a su derecha (Alt+D)"
+                          onClick={() => {
+                            pushStep(
+                              "duplicate_column",
+                              activeColumn,
+                              `Duplicar columna "${activeColumn}"`,
+                              { newColumnName: `${activeColumn}_Copia` }
+                            );
+                            setOpenMenu(null);
+                          }}
+                        >
+                          <span>Duplicar columna</span>
+                        </button>
+                        <button
+                          className="mr-dropdown-item"
+                          title="Cambiar el nombre del encabezado de esta columna (Alt+R)"
+                          onClick={() => {
+                            setRenameColDraft(activeColumn);
+                            setIsRenamingCol(true);
+                            setOpenMenu(null);
+                          }}
+                        >
+                          <span>Renombrar columna...</span>
+                        </button>
+                        <button
+                          className="mr-dropdown-item"
+                          disabled={columns.length <= 1}
+                          style={{ color: "#fca5a5" }}
+                          title="Oculta la columna de la vista y exportación sin destruir sus datos base (Alt+X)"
+                          onClick={() => {
+                            pushStep(
+                              "hide_column",
+                              activeColumn,
+                              `Ocultar columna "${activeColumn}"`
+                            );
+                            setOpenMenu(null);
+                          }}
+                        >
+                          <span>
+                            <EyeOff size={12} style={{ verticalAlign: "middle", marginRight: 6 }} />
+                            Borrar (desaparecer) columna
+                          </span>
+                        </button>
+                        <div className="mr-menu-divider" />
+                        <button
+                          className="mr-dropdown-item"
+                          title="Crea 2 nuevas columnas contiguas separando por guion '-' (Alt+2)"
+                          onClick={() => {
+                            pushStep(
+                              "split_into_two_columns",
+                              activeColumn,
+                              `Dividir "${activeColumn}" en 2 columnas (-)` ,
+                              { separator: "-" }
+                            );
+                            setOpenMenu(null);
+                          }}
+                        >
+                          <span>Dividir en 2 columnas (por "-")</span>
+                        </button>
+                        <button
+                          className="mr-dropdown-item"
+                          title="Recorta la columna conservando el texto a la izquierda del guion (Alt+I)"
+                          onClick={() => {
+                            pushStep(
+                              "split_keep_left",
+                              activeColumn,
+                              `Conservar izquierda antes de "-" (${activeColumn})`,
+                              { separator: "-" }
+                            );
+                            setOpenMenu(null);
+                          }}
+                        >
+                          <span>Conservar izquierda (antes de "-")</span>
+                        </button>
+                        <button
+                          className="mr-dropdown-item"
+                          title="Recorta la columna conservando el texto a la derecha del guion (Alt+U)"
+                          onClick={() => {
+                            pushStep(
+                              "split_keep_right",
+                              activeColumn,
+                              `Conservar derecha después de "-" (${activeColumn})`,
+                              { separator: "-" }
+                            );
+                            setOpenMenu(null);
+                          }}
+                        >
+                          <span>Conservar derecha (después de "-")</span>
+                        </button>
+                        <div className="mr-menu-divider" />
+                        <button
+                          className="mr-dropdown-item"
+                          title="Crea las 3 columnas clásicas: Nombre(s), Apellido_Paterno y Apellido_Materno (Alt+N)"
+                          onClick={() => {
+                            pushStep(
+                              "split_mexican_name",
+                              activeColumn,
+                              `Separar "${activeColumn}" en Nombre(s), Apellido_Paterno y Apellido_Materno`
+                            );
+                            setOpenMenu(null);
+                          }}
+                        >
+                          <span>Separar en Nombre(s) + 2 Apellidos</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                {/* Homologación Masiva: EXCLUSIVA cuando la columna seleccionada es de Fecha */}
+                {isRenamingCol && (
+                  <div className="mr-filter-banner" style={{ marginBottom: 10 }}>
+                    <input
+                      className="mr-cell-input"
+                      autoFocus
+                      value={renameColDraft}
+                      placeholder="Nuevo nombre de columna..."
+                      onChange={(e) => setRenameColDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          const nextName = renameColDraft.trim();
+                          setIsRenamingCol(false);
+                          if (nextName && nextName !== activeColumn) {
+                            pushStep(
+                              "rename_column",
+                              activeColumn,
+                              `Renombrar columna "${activeColumn}" → "${nextName}"`,
+                              { newColumnName: nextName }
+                            );
+                            updateActiveSession((s) => ({ ...s, selectedColumn: nextName }));
+                          }
+                        } else if (e.key === "Escape") {
+                          setIsRenamingCol(false);
+                        }
+                      }}
+                    />
+                    <button
+                      className="mr-pick-btn"
+                      onClick={() => {
+                        const nextName = renameColDraft.trim();
+                        setIsRenamingCol(false);
+                        if (nextName && nextName !== activeColumn) {
+                          pushStep(
+                            "rename_column",
+                            activeColumn,
+                            `Renombrar columna "${activeColumn}" → "${nextName}"`,
+                            { newColumnName: nextName }
+                          );
+                          updateActiveSession((s) => ({ ...s, selectedColumn: nextName }));
+                        }
+                      }}
+                    >
+                      Guardar
+                    </button>
+                  </div>
+                )}
+
                 {isDateCol && (
                   <div className="mr-date-bar" style={{ flexDirection: "column", alignItems: "stretch" }}>
                     <div style={{ fontSize: 11, fontWeight: 600, color: "#93c5fd" }}>
@@ -941,7 +1579,9 @@ export default function App() {
                             autoFocus
                             value={filterAlias}
                             placeholder="Nombre del filtro..."
-                            onChange={(e) => setFilterAlias(e.target.value)}
+                            onChange={(e) =>
+                              updateActiveSession((s) => ({ ...s, filterAlias: e.target.value }))
+                            }
                             onBlur={() => setIsEditingFilterAlias(false)}
                             onKeyDown={(e) => {
                               if (e.key === "Enter" || e.key === "Escape") {
@@ -968,10 +1608,13 @@ export default function App() {
                           <button
                             className="mr-icon-btn"
                             title="Quitar filtro"
-                            onClick={() => {
-                              setFacetFilter(null);
-                              setFilterAlias("");
-                            }}
+                            onClick={() =>
+                              updateActiveSession((s) => ({
+                                ...s,
+                                facetFilter: null,
+                                filterAlias: "",
+                              }))
+                            }
                           >
                             ✕
                           </button>
@@ -987,8 +1630,11 @@ export default function App() {
                           className={`mr-facet-item ${facetFilter === f.value ? "selected" : ""}`}
                           onClick={() => {
                             if (isRenamingThis) return;
-                            setFacetFilter(facetFilter === f.value ? null : f.value);
-                            setFilterAlias("");
+                            updateActiveSession((s) => ({
+                              ...s,
+                              facetFilter: s.facetFilter === f.value ? null : f.value,
+                              filterAlias: "",
+                            }));
                           }}
                         >
                           {isRenamingThis ? (
@@ -1034,31 +1680,113 @@ export default function App() {
           </div>
         </aside>
 
-        {/* ZONE 2: Editable Table with Whole-Column Selection */}
+        {/* ZONE 2: Multi-Table Session Tabs & Editable Table */}
         <main className="mr-zone mr-zone-center">
+          {/* Barra de pestañas de tablas abiertas */}
+          {sessions.length > 0 && (
+            <div className="mr-session-tabs">
+              {sessions.map((sess) => {
+                const isActive = sess.id === activeSession?.id;
+                return (
+                  <div
+                    key={sess.id}
+                    className={`mr-session-tab ${isActive ? "active" : ""}`}
+                    onClick={() => setActiveSessionId(sess.id)}
+                    title={`${sess.fileName} (${sess.steps.length} pasos aplicados)`}
+                  >
+                    <FileSpreadsheet size={13} color={isActive ? "#60a5fa" : "#808080"} />
+                    <span>{sess.fileName}</span>
+                    {sess.steps.length > 0 && (
+                      <span className="mr-acc-badge">{sess.steps.length}</span>
+                    )}
+                    <button
+                      type="button"
+                      className="mr-session-close"
+                      title="Cerrar esta tabla"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleCloseSession(sess.id);
+                      }}
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           <div className="mr-table-bar">
             <span style={{ fontWeight: 600 }}>
               {hasData
-                ? `Vista de Tabla · ${visibleRows.length} de ${currentDataRows.length} filas`
+                ? `Vista de Tabla · ${visibleRows.length} de ${currentDataRows.length} filas${
+                    sortState
+                      ? ` · Ordenado por ${sortState.column} (${
+                          sortState.dir === "asc" ? "A→Z / Menor a Mayor" : "Z→A / Mayor a Menor"
+                        })`
+                      : ""
+                  }`
                 : "Vista de Tabla"}
             </span>
             <div className="mr-actions">
+              {totalPages > 1 && activeSession && (
+                <>
+                  <button
+                    className="mr-btn"
+                    disabled={currentPage <= 0}
+                    onClick={() =>
+                      setPageBySession((p) => ({
+                        ...p,
+                        [activeSession.id]: Math.max(0, currentPage - 1),
+                      }))
+                    }
+                    title="Página anterior (100 filas por bloque)"
+                  >
+                    ◀
+                  </button>
+                  <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                    Pág. {currentPage + 1} / {totalPages}
+                  </span>
+                  <button
+                    className="mr-btn"
+                    disabled={currentPage >= totalPages - 1}
+                    onClick={() =>
+                      setPageBySession((p) => ({
+                        ...p,
+                        [activeSession.id]: Math.min(totalPages - 1, currentPage + 1),
+                      }))
+                    }
+                    title="Página siguiente (100 filas por bloque)"
+                  >
+                    ▶
+                  </button>
+                </>
+              )}
+              {sortState && (
+                <button
+                  className="mr-btn"
+                  onClick={() => updateActiveSession((s) => ({ ...s, sortState: null }))}
+                  title="Restablecer orden original de filas"
+                >
+                  ✕ Quitar orden
+                </button>
+              )}
               {hasData && (
                 <button
                   className="mr-btn"
-                  onClick={() => setSelectionMode("column")}
+                  onClick={() => updateActiveSession((s) => ({ ...s, selectionMode: "column" }))}
                   title="Seleccionar todas las celdas de la columna actual"
                 >
                   <Columns3 size={13} /> Seleccionar columna "{activeColumn}"
                 </button>
               )}
-              {trash.length > 0 && (
+              {(trash.length > 0 || hiddenColumns.length > 0) && (
                 <button
                   className="mr-btn"
                   onClick={() => setRightTab("trash")}
-                  title="Ver filas descartadas o restaurarlas"
+                  title="Ver filas o columnas ocultas para restaurarlas"
                 >
-                  <Trash2 size={13} /> Papelera ({trash.length})
+                  <Trash2 size={13} /> Papelera ({trash.length + hiddenColumns.length})
                 </button>
               )}
               {selectedRealRowIdx !== null && (
@@ -1073,7 +1801,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Barra contextual de reformateo de fecha: EXCLUSIVA al seleccionar una columna de fecha */}
           {hasData && selectionMode === "column" && isDateCol && (
             <div className="mr-col-banner">
               <span style={{ fontSize: 12, fontWeight: 600, color: "#93c5fd" }}>
@@ -1113,20 +1840,26 @@ export default function App() {
           {!hasData ? (
             <div className="mr-empty-state">
               <div className="mr-empty-card">
-                <Archive size={32} color="#60a5fa" style={{ marginBottom: 8 }} />
+                <img
+                  src="/mR_harmonia_cutout.png"
+                  alt="ModernRefine"
+                  style={{ width: 48, height: 48, objectFit: "contain", marginBottom: 8 }}
+                />
                 <h2 style={{ margin: "0 0 6px", fontSize: 16 }}>
                   Listo para limpiar tus datos
                 </h2>
                 <p style={{ margin: "0 0 16px", color: "var(--text-muted)", lineHeight: 1.5 }}>
-                  Inicia abriendo un archivo <code>.csv</code> desde tu equipo o prueba con una de
-                  las plantillas ubicadas en la raíz del proyecto.
+                  Abre uno o varios archivos (<code>.xlsx</code>, <code>.csv</code>,{" "}
+                  <code>.tsv</code>, <code>.ods</code> o <code>.json</code>) en pestañas simultáneas
+                  o prueba con una plantilla de la raíz.
                 </p>
 
                 <button
                   className="mr-btn mr-btn-primary"
                   onClick={() => fileInputRef.current?.click()}
+                  title="Abrir uno o varios archivos de datos (Ctrl+O)"
                 >
-                  <Upload size={14} /> Abrir archivo CSV
+                  <Upload size={14} /> Abrir archivo
                 </button>
 
                 {ROOT_CSV_TEMPLATES.length > 0 && (
@@ -1158,6 +1891,9 @@ export default function App() {
                     {columns.map((col, colIdx) => {
                       const isColActive = col === activeColumn;
                       const isFullColSelected = isColActive && selectionMode === "column";
+                      const isSorted = sortState?.column === col;
+                      const sortDir = isSorted ? sortState.dir : null;
+
                       return (
                         <th
                           key={col}
@@ -1170,23 +1906,45 @@ export default function App() {
                           }
                           title={`Clic para seleccionar toda la columna "${col}"`}
                           onClick={() => {
-                            setSelectedColumn(col);
-                            setSelectionMode("column");
-                            setFacetFilter(null);
-                            setSelectedCell((prev) => ({
-                              visibleIdx: prev?.visibleIdx ?? 0,
-                              colIdx,
+                            updateActiveSession((s) => ({
+                              ...s,
+                              selectedColumn: col,
+                              selectionMode: "column",
+                              facetFilter: null,
+                              selectedCell: {
+                                visibleIdx: s.selectedCell?.visibleIdx ?? 0,
+                                colIdx,
+                              },
                             }));
                           }}
                         >
-                          {col} {isFullColSelected ? "✓" : ""}
+                          <div className="mr-th-inner">
+                            <span>
+                              {col} {isFullColSelected ? "✓" : ""}
+                            </span>
+                            <button
+                              type="button"
+                              className={`mr-sort-btn ${isSorted ? "active" : ""}`}
+                              title={`Ordenar "${col}" (menor a mayor / alfabético)`}
+                              onClick={(e) => handleToggleColumnSort(col, e)}
+                            >
+                              {sortDir === "asc" ? (
+                                <ArrowUp size={12} />
+                              ) : sortDir === "desc" ? (
+                                <ArrowDown size={12} />
+                              ) : (
+                                <ArrowUpDown size={12} />
+                              )}
+                            </button>
+                          </div>
                         </th>
                       );
                     })}
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleRows.map(({ origIdx, data }, visibleIdx) => {
+                  {pagedRows.map(({ origIdx, data }, pageIdx) => {
+                    const visibleIdx = pageOffset + pageIdx;
                     const isRowSelected =
                       selectionMode === "cell" && selectedCell?.visibleIdx === visibleIdx;
                     return (
@@ -1218,14 +1976,20 @@ export default function App() {
                                 .filter(Boolean)
                                 .join(" ")}
                               onClick={() => {
-                                setSelectionMode("cell");
-                                setSelectedCell({ visibleIdx, colIdx });
-                                setSelectedColumn(col);
+                                updateActiveSession((s) => ({
+                                  ...s,
+                                  selectionMode: "cell",
+                                  selectedCell: { visibleIdx, colIdx },
+                                  selectedColumn: col,
+                                }));
                                 tableWrapRef.current?.focus();
                               }}
                               onDoubleClick={() => {
-                                setSelectionMode("cell");
-                                setSelectedCell({ visibleIdx, colIdx });
+                                updateActiveSession((s) => ({
+                                  ...s,
+                                  selectionMode: "cell",
+                                  selectedCell: { visibleIdx, colIdx },
+                                }));
                                 setEditingCell({ origIdx, col });
                                 setEditDraft(val);
                               }}
@@ -1259,7 +2023,7 @@ export default function App() {
           )}
         </main>
 
-        {/* ZONE 3: History, Trash & JSON Recipe */}
+        {/* ZONE 3: History Accordions, Trash & JSON Recipe */}
         <aside className="mr-zone mr-zone-right">
           <div className="mr-zone-header">
             <span>
@@ -1269,6 +2033,25 @@ export default function App() {
           </div>
 
           <div className="mr-scroll">
+            <div className="mr-history-undo-bar">
+              <button
+                className="mr-btn"
+                onClick={handleUndo}
+                disabled={steps.length === 0}
+                title="Deshacer último paso (Ctrl+Z)"
+              >
+                <Undo2 size={14} /> Deshacer
+              </button>
+              <button
+                className="mr-btn"
+                onClick={handleRedo}
+                disabled={redoStack.length === 0}
+                title="Rehacer paso (Ctrl+Shift+Z)"
+              >
+                <Redo2 size={14} /> Rehacer
+              </button>
+            </div>
+
             <div className="mr-tabs-3">
               <button
                 className={`mr-tab ${rightTab === "history" ? "active" : ""}`}
@@ -1280,7 +2063,7 @@ export default function App() {
                 className={`mr-tab ${rightTab === "trash" ? "active" : ""}`}
                 onClick={() => setRightTab("trash")}
               >
-                Papelera ({trash.length})
+                Papelera ({trash.length + hiddenColumns.length})
               </button>
               <button
                 className={`mr-tab ${rightTab === "recipe" ? "active" : ""}`}
@@ -1291,88 +2074,176 @@ export default function App() {
             </div>
 
             {rightTab === "history" &&
-              (steps.length === 0 ? (
+              (stepAccordionGroups.length === 0 ? (
                 <div style={{ color: "var(--text-dim)", fontSize: 12, padding: "12px 4px" }}>
-                  Aún no aplicas cambios. Puedes activar, desactivar o eliminar cada paso de forma
-                  aislada.
+                  Aún no aplicas cambios en esta tabla. Los pasos se agruparán automáticamente por
+                  columna y tarea.
                 </div>
               ) : (
-                steps.map((step, i) => (
-                  <div
-                    key={step.id}
-                    className={`mr-step-card ${step.enabled ? "" : "disabled"}`}
-                  >
-                    <div className="mr-step-row">
-                      <label className="mr-step-check">
-                        <input
-                          type="checkbox"
-                          checked={step.enabled}
-                          onChange={() => handleToggleStep(step.id)}
-                          title="Activar o desactivar este paso en tiempo real"
-                        />
-                        <div>
-                          <div className="mr-step-num">Paso {i + 1}</div>
-                          <div className="mr-step-label">{step.label}</div>
-                        </div>
-                      </label>
-                      <button
-                        className="mr-icon-btn"
-                        title="Eliminar este paso del historial"
-                        onClick={() => handleDeleteStep(step.id)}
+                stepAccordionGroups.map((group) => {
+                  const isCollapsed = Boolean(collapsedGroups[group.key]);
+                  const allEnabled = group.steps.every((s) => s.step.enabled);
+                  const groupIds = group.steps.map((s) => s.step.id);
+
+                  return (
+                    <div key={group.key} className="mr-acc-group">
+                      <div
+                        className="mr-acc-header"
+                        onClick={() =>
+                          setCollapsedGroups((prev) => ({
+                            ...prev,
+                            [group.key]: !prev[group.key],
+                          }))
+                        }
                       >
-                        <Trash2 size={13} />
-                      </button>
+                        <div className="mr-acc-title">
+                          <input
+                            type="checkbox"
+                            checked={allEnabled}
+                            title="Activar o desactivar todos los pasos de esta tarea"
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={() => handleToggleGroupSteps(groupIds, !allEnabled)}
+                          />
+                          {isCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                            {group.title}
+                          </span>
+                        </div>
+                        <div className="mr-facet-actions">
+                          <span className="mr-acc-badge">{group.steps.length}</span>
+                          <button
+                            className="mr-icon-btn"
+                            title="Eliminar todos los pasos de este grupo"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteGroupSteps(groupIds);
+                            }}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      </div>
+
+                      {!isCollapsed && (
+                        <div className="mr-acc-body">
+                          {group.steps.map(({ step, globalIndex }) => (
+                            <div
+                              key={step.id}
+                              className={`mr-step-card ${step.enabled ? "" : "disabled"}`}
+                            >
+                              <div className="mr-step-row">
+                                <label className="mr-step-check">
+                                  <input
+                                    type="checkbox"
+                                    checked={step.enabled}
+                                    onChange={() => handleToggleStep(step.id)}
+                                    title="Activar o desactivar este paso en tiempo real"
+                                  />
+                                  <div>
+                                    <div className="mr-step-num">Paso {globalIndex + 1}</div>
+                                    <div className="mr-step-label">{step.label}</div>
+                                  </div>
+                                </label>
+                                <button
+                                  className="mr-icon-btn"
+                                  title="Eliminar este paso del historial"
+                                  onClick={() => handleDeleteStep(step.id)}
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))
+                  );
+                })
               ))}
 
             {rightTab === "trash" &&
-              (trash.length === 0 ? (
+              (trash.length === 0 && hiddenColumns.length === 0 ? (
                 <div style={{ color: "var(--text-dim)", fontSize: 12, padding: "12px 4px" }}>
-                  No hay filas eliminadas en esta sesión.
+                  No hay filas ni columnas ocultas en esta tabla.
                 </div>
               ) : (
                 <div>
-                  <button
-                    className="mr-btn"
-                    style={{ width: "100%", justifyContent: "center", marginBottom: 10 }}
-                    onClick={() =>
-                      handleRestoreRows(
-                        trash.map((t) => t.origIdx),
-                        `Restaurar ${trash.length} filas de la papelera`
-                      )
-                    }
-                  >
-                    <RotateCcw size={13} /> Restaurar todas ({trash.length})
-                  </button>
+                  {hiddenColumns.length > 0 && (
+                    <div style={{ marginBottom: 12 }}>
+                      <div
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 700,
+                          color: "#93c5fd",
+                          marginBottom: 6,
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        Columnas ocultas ({hiddenColumns.length})
+                      </div>
+                      {hiddenColumns.map((col) => (
+                        <div key={col} className="mr-trash-card">
+                          <div className="mr-trash-meta">
+                            <strong>Columna: {col}</strong>
+                            <span>Datos preservados en memoria</span>
+                          </div>
+                          <button
+                            className="mr-op-btn"
+                            style={{ width: "100%" }}
+                            onClick={() =>
+                              pushStep("restore_column", col, `Restaurar columna "${col}"`)
+                            }
+                          >
+                            ↩ Volver a mostrar columna "{col}"
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
 
-                  {trash.map((entry) => (
-                    <div key={entry.origIdx} className="mr-trash-card">
-                      <div className="mr-trash-meta">
-                        <strong>Fila #{entry.origIdx + 1}</strong>
-                        <span>{entry.reason}</span>
-                      </div>
-                      <div className="mr-trash-preview">
-                        {columns
-                          .slice(0, 4)
-                          .map((c) => `${c}: ${entry.data[c] || "∅"}`)
-                          .join(" · ")}
-                      </div>
+                  {trash.length > 0 && (
+                    <>
                       <button
-                        className="mr-op-btn"
-                        style={{ width: "100%" }}
+                        className="mr-btn"
+                        style={{ width: "100%", justifyContent: "center", marginBottom: 10 }}
                         onClick={() =>
                           handleRestoreRows(
-                            [entry.origIdx],
-                            `Restaurar fila #${entry.origIdx + 1}`
+                            trash.map((t) => t.origIdx),
+                            `Restaurar ${trash.length} filas de la papelera`
                           )
                         }
                       >
-                        ↩ Restaurar fila #{entry.origIdx + 1}
+                        <RotateCcw size={13} /> Restaurar todas las filas ({trash.length})
                       </button>
-                    </div>
-                  ))}
+
+                      {trash.map((entry) => (
+                        <div key={entry.origIdx} className="mr-trash-card">
+                          <div className="mr-trash-meta">
+                            <strong>Fila #{entry.origIdx + 1}</strong>
+                            <span>{entry.reason}</span>
+                          </div>
+                          <div className="mr-trash-preview">
+                            {columns
+                              .slice(0, 4)
+                              .map((c) => `${c}: ${entry.data[c] || "∅"}`)
+                              .join(" · ")}
+                          </div>
+                          <button
+                            className="mr-op-btn"
+                            style={{ width: "100%" }}
+                            onClick={() =>
+                              handleRestoreRows(
+                                [entry.origIdx],
+                                `Restaurar fila #${entry.origIdx + 1}`
+                              )
+                            }
+                          >
+                            ↩ Restaurar fila #{entry.origIdx + 1}
+                          </button>
+                        </div>
+                      ))}
+                    </>
+                  )}
                 </div>
               ))}
 

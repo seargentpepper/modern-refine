@@ -1,7 +1,19 @@
+# Dependencias y build
 node_modules/
 dist/
+build/
+
+# Rust / Tauri - NO SUBIR NUNCA
 src-rust/target/
+src-tauri/target/
+src-tauri/WixTools/
+*.exe
+*.dll
+
+# Archivos locales / privados
 *.local.csv
 *.private.csv
 *.local.xlsx
 *.private.xlsx
+.env
+.env.local

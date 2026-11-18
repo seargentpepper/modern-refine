@@ -98,7 +98,6 @@ export function parseCsvText(raw: string): {
     return cells;
   };
 
-  // Deduplicar encabezados repetidos automáticamente
   const rawHeaders = splitRow(lines[0]).map((c, idx) => c.trim() || `Columna_${idx + 1}`);
   const headerCounts = new Map<string, number>();
   let dedupedHeaders = 0;
@@ -237,7 +236,6 @@ export function parseCalendarDate(
     .trim();
   if (!cleaned) return null;
 
-  // 1) Serial numérico de Excel (ej. 45671)
   if (/^\d{5}(\.\d+)?$/.test(cleaned)) {
     const serial = Math.floor(Number(cleaned));
     if (serial >= 20000 && serial <= 70000) {
@@ -252,7 +250,6 @@ export function parseCalendarDate(
     }
   }
 
-  // 2) YYYY-MM-DD, YYYY/MM/DD, YYYY.MM.DD
   const ymd = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/.exec(cleaned);
   if (ymd) {
     const y = Number(ymd[1]);
@@ -264,7 +261,6 @@ export function parseCalendarDate(
     return allowRepair ? normalizeAndClampYMD(y, m, d, true) : null;
   }
 
-  // 3) DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY (o MM/DD/YYYY)
   const dmy = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/.exec(cleaned);
   if (dmy) {
     const first = Number(dmy[1]);
@@ -277,7 +273,6 @@ export function parseCalendarDate(
     return allowRepair ? normalizeAndClampYMD(y, first, second, false) : null;
   }
 
-  // 4) Textual: "14-ene-2025", "14 de enero de 2025", "14 Jan 2025"
   const textMatch = /^(\d{1,2})[\s/-]+(?:de\s+)?([a-záéíóú]+)[\s,/-]+(?:de[l]?\s+)?(\d{2,4})$/i.exec(
     stripDiacritics(cleaned.toLowerCase())
   );
@@ -426,7 +421,7 @@ function fingerprintKey(val: string): string {
   return Array.from(new Set(tokens)).join(" ");
 }
 
-// 2. N-gram Fingerprint (bigramas ordenados y deduplicados)
+// 2. N-gram Fingerprint
 function ngramFingerprintKey(val: string, n = 2): string {
   const clean = stripDiacritics(val.toLowerCase()).replace(/[^a-z0-9]/g, "");
   if (clean.length <= n) return clean;
@@ -458,12 +453,12 @@ function levenshtein(a: string, b: string): number {
   return dp[n];
 }
 
-// 4. Fonético en Español (Soundex / Metaphone ES)
+// 4. Fonético en Español
 export function spanishPhoneticKey(val: string): string {
   let s = stripDiacritics(val.toLowerCase()).replace(/[^a-z\s]/g, " ");
   s = s
-    .replace(/\bh/g, "") // h muda inicial
-    .replace(/h/g, "") // h muda interna
+    .replace(/\bh/g, "")
+    .replace(/h/g, "")
     .replace(/ll/g, "y")
     .replace(/v/g, "b")
     .replace(/z/g, "s")
@@ -471,8 +466,8 @@ export function spanishPhoneticKey(val: string): string {
     .replace(/qu([ei])/g, "k$1")
     .replace(/c([aou])/g, "k$1")
     .replace(/g([ei])/g, "j$1")
-    .replace(/x/g, "j") // Xalapa <-> Jalapa, Oaxaca <-> Oajaca
-    .replace(/([a-z])\1+/g, "$1") // colapsar letras repetidas
+    .replace(/x/g, "j")
+    .replace(/([a-z])\1+/g, "$1")
     .replace(/\s+/g, "");
   return s;
 }
@@ -482,7 +477,6 @@ function isConsonantAbbrev(shortStr: string, longStr: string): boolean {
   const s = stripDiacritics(shortStr.toLowerCase()).replace(/[^a-z]/g, "");
   const l = stripDiacritics(longStr.toLowerCase()).replace(/[^a-z]/g, "");
   if (s.length < 2 || s.length >= l.length - 1 || s[0] !== l[0]) return false;
-  // Si tiene 2 letras (ej. NL -> Nuevo Leon), exigir que tenga punto en el original (N.L.)
   if (s.length === 2 && !shortStr.includes(".")) return false;
   let j = 0;
   for (let i = 0; i < l.length && j < s.length; i++) {
@@ -532,7 +526,6 @@ export function computeClusters(rows: DataRow[], column: string): ClusterGroup[]
       const fpA = fingerprintKey(a);
       const fpB = fingerprintKey(b);
 
-      // 1. Fingerprint exacto o alias conocido
       if (fpA === fpB || (KNOWN_ALIASES[fpA] && KNOWN_ALIASES[fpA] === KNOWN_ALIASES[fpB])) {
         union(i, j, "Fingerprint");
         continue;
@@ -540,7 +533,6 @@ export function computeClusters(rows: DataRow[], column: string): ClusterGroup[]
 
       if (/\d/.test(a) || /\d/.test(b)) continue;
 
-      // 2. N-gram Fingerprint (detecta transposiciones como Guadalaraja / Gaudalajara)
       const ngA = ngramFingerprintKey(a, 2);
       const ngB = ngramFingerprintKey(b, 2);
       if (ngA.length >= 5 && ngA === ngB) {
@@ -548,7 +540,6 @@ export function computeClusters(rows: DataRow[], column: string): ClusterGroup[]
         continue;
       }
 
-      // 3. Fonético en Español (Villa Hermosa <-> Biya Hermosa <-> Billa Ermosa, Xalapa <-> Jalapa, Cancún <-> Kankun)
       const phA = spanishPhoneticKey(a);
       const phB = spanishPhoneticKey(b);
       if (phA.length >= 4 && phA === phB) {
@@ -556,7 +547,6 @@ export function computeClusters(rows: DataRow[], column: string): ClusterGroup[]
         continue;
       }
 
-      // 4. Levenshtein (distancia de edición <= 2)
       const normA = stripDiacritics(a.toLowerCase()).replace(/[^a-z]/g, "");
       const normB = stripDiacritics(b.toLowerCase()).replace(/[^a-z]/g, "");
       if (normA.length >= 4 && normB.length >= 4 && levenshtein(normA, normB) <= 2) {
@@ -564,7 +554,6 @@ export function computeClusters(rows: DataRow[], column: string): ClusterGroup[]
         continue;
       }
 
-      // 5. Subsecuencia Consonántica / Abreviaturas (Vhsa, Gdl, Mty, Tab., Ver., Jal.)
       if (isConsonantAbbrev(a, b) || isConsonantAbbrev(b, a)) {
         union(i, j, "Abreviatura");
       }
@@ -610,7 +599,6 @@ function toTitleCase(input: string): string {
 function extractCleanNumber(val: string): string {
   const trimmed = val.trim();
   if (!trimmed) return "";
-  // Si parece moneda ($15,750.00), preservar punto decimal
   if (/^\$?\s*-?[\d,]+(\.\d+)?$/.test(trimmed)) {
     return trimmed.replace(/[^0-9.-]/g, "");
   }
@@ -623,16 +611,333 @@ function padMexicanPostalCode(val: string): string {
   return digits.length <= 5 ? digits.padStart(5, "0") : digits.slice(0, 5);
 }
 
+// ============================================================================
+// Separador Inteligente de Nombres Latinoamericanos (3 Columnas Clásicas)
+// Nombre(s) | Apellido_Paterno | Apellido_Materno
+// ============================================================================
+const NAME_CONNECTORS = new Set([
+  "de",
+  "del",
+  "la",
+  "las",
+  "los",
+  "san",
+  "santa",
+  "y",
+  "vda",
+  "vda.",
+  "viuda",
+  "mc",
+  "mac",
+]);
+
+const COMMON_SECOND_GIVEN_NAMES = new Set([
+  "carlos",
+  "luis",
+  "miguel",
+  "angel",
+  "fernanda",
+  "fernando",
+  "alberto",
+  "antonio",
+  "manuel",
+  "jose",
+  "maria",
+  "guadalupe",
+  "sofia",
+  "elena",
+  "isabel",
+  "alejandro",
+  "alejandra",
+  "eduardo",
+  "enrique",
+  "francisco",
+  "javier",
+  "daniel",
+  "daniela",
+  "pablo",
+  "paola",
+  "andrea",
+  "gabriela",
+  "carmen",
+  "rosa",
+  "luz",
+  "jesus",
+  "arturo",
+  "armando",
+  "cesar",
+  "david",
+  "emilio",
+  "esteban",
+  "fabiola",
+  "gerardo",
+  "hector",
+  "hugo",
+  "ignacio",
+  "ivan",
+  "jorge",
+  "julio",
+  "laura",
+  "leticia",
+  "liliana",
+  "lorena",
+  "lucia",
+  "martha",
+  "martin",
+  "mauricio",
+  "monica",
+  "natalia",
+  "norma",
+  "oscar",
+  "patricia",
+  "paul",
+  "pedro",
+  "rafael",
+  "omar",
+  "ramon",
+  "raul",
+  "ricardo",
+  "roberto",
+  "rocio",
+  "rodolfo",
+  "rodrigo",
+  "ruben",
+  "salvador",
+  "sandra",
+  "santiago",
+  "sergio",
+  "silvia",
+  "teresa",
+  "veronica",
+  "victor",
+  "victoria",
+  "ximena",
+  "yolanda",
+]);
+
+export function splitLatinAmericanName(raw: string): {
+  nombres: string;
+  apellidoPaterno: string;
+  apellidoMaterno: string;
+} {
+  const words = raw.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) {
+    return { nombres: "", apellidoPaterno: "", apellidoMaterno: "" };
+  }
+
+  // Etapa 1: Agrupar conectores (de, del, de la, de los, san, santa) con la palabra siguiente
+  const blocks: string[] = [];
+  let prefixBuffer: string[] = [];
+
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    const norm = stripDiacritics(w.toLowerCase());
+    if (NAME_CONNECTORS.has(norm) && i < words.length - 1) {
+      prefixBuffer.push(w);
+    } else {
+      if (prefixBuffer.length > 0) {
+        const combined = [...prefixBuffer, w].join(" ");
+        prefixBuffer = [];
+        // Si es "del Carmen", "de Jesús", "de la Luz", "del Rosario" después de María/José en el primer bloque, unir al nombre
+        const normCombined = stripDiacritics(combined.toLowerCase());
+        if (
+          blocks.length === 1 &&
+          /^(del?\s+(carmen|jesus|socorro|rosario|luz|pilar|rocio|refugio|consuelo)|de\s+la\s+(luz|cruz|paz))$/.test(
+            normCombined
+          ) &&
+          /^(maria|ma\.?|jose|j\.?)$/.test(stripDiacritics(blocks[0].toLowerCase()))
+        ) {
+          blocks[0] = `${blocks[0]} ${combined}`;
+        } else {
+          blocks.push(combined);
+        }
+      } else {
+        blocks.push(w);
+      }
+    }
+  }
+  if (prefixBuffer.length > 0) {
+    blocks.push(prefixBuffer.join(" "));
+  }
+
+  // Etapa 2: Repartir bloques en Nombre(s), Apellido_Paterno y Apellido_Materno
+  if (blocks.length === 1) {
+    return { nombres: blocks[0], apellidoPaterno: "", apellidoMaterno: "" };
+  }
+
+  if (blocks.length === 2) {
+    return { nombres: blocks[0], apellidoPaterno: blocks[1], apellidoMaterno: "" };
+  }
+
+  if (blocks.length === 3) {
+    const secondNorm = stripDiacritics(blocks[1].toLowerCase());
+    const firstAlreadyCompound = blocks[0].includes(" ");
+    if (!firstAlreadyCompound && COMMON_SECOND_GIVEN_NAMES.has(secondNorm)) {
+      // Ej. "Juan Carlos Méndez", "María Fernanda Ruiz", "Luis Ángel Torres" -> 2 Nombres + 1 Apellido
+      return {
+        nombres: `${blocks[0]} ${blocks[1]}`,
+        apellidoPaterno: blocks[2],
+        apellidoMaterno: "",
+      };
+    }
+    // Ej. "Ana López Pérez" -> 1 Nombre + 2 Apellidos
+    return {
+      nombres: blocks[0],
+      apellidoPaterno: blocks[1],
+      apellidoMaterno: blocks[2],
+    };
+  }
+
+  // 4 o más bloques: últimos 2 bloques son Apellido_Paterno y Apellido_Materno
+  return {
+    nombres: blocks.slice(0, blocks.length - 2).join(" "),
+    apellidoPaterno: blocks[blocks.length - 2],
+    apellidoMaterno: blocks[blocks.length - 1],
+  };
+}
+
+function uniqueColName(existing: string[], desired: string): string {
+  if (!existing.includes(desired)) return desired;
+  let k = 2;
+  while (existing.includes(`${desired}_${k}`)) k++;
+  return `${desired}_${k}`;
+}
+
 export function replayRecipeWithTrash(
   baseRows: DataRow[],
-  steps: RefineStep[]
-): { activeRows: IndexedRow[]; trash: DeletedRowEntry[] } {
-  let activeRows: IndexedRow[] = baseRows.map((data, origIdx) => ({ origIdx, data }));
+  steps: RefineStep[],
+  baseColumns?: string[]
+): {
+  columns: string[];
+  hiddenColumns: string[];
+  activeRows: IndexedRow[];
+  trash: DeletedRowEntry[];
+} {
+  let columns: string[] =
+    baseColumns && baseColumns.length > 0
+      ? [...baseColumns]
+      : baseRows.length > 0
+        ? Object.keys(baseRows[0])
+        : [];
+  let hiddenColumns: string[] = [];
+  let activeRows: IndexedRow[] = baseRows.map((data, origIdx) => ({ origIdx, data: { ...data } }));
   let trash: DeletedRowEntry[] = [];
 
   for (const step of steps) {
     if (!step.enabled) continue;
     const { column, kind, params } = step;
+
+    if (kind === "hide_column") {
+      if (columns.length > 1 && columns.includes(column)) {
+        columns = columns.filter((c) => c !== column);
+        if (!hiddenColumns.includes(column)) hiddenColumns.push(column);
+      }
+      continue;
+    }
+
+    if (kind === "restore_column") {
+      if (hiddenColumns.includes(column) && !columns.includes(column)) {
+        hiddenColumns = hiddenColumns.filter((c) => c !== column);
+        columns = [...columns, column];
+      }
+      continue;
+    }
+
+    if (kind === "duplicate_column") {
+      const colIdx = columns.indexOf(column);
+      if (colIdx === -1) continue;
+      const desired = String(params?.newColumnName ?? `${column}_Copia`).trim() || `${column}_Copia`;
+      const targetCol = uniqueColName(columns, desired);
+      columns = [...columns.slice(0, colIdx + 1), targetCol, ...columns.slice(colIdx + 1)];
+      activeRows = activeRows.map((item) => ({
+        ...item,
+        data: { ...item.data, [targetCol]: item.data[column] ?? "" },
+      }));
+      continue;
+    }
+
+    if (kind === "rename_column") {
+      const colIdx = columns.indexOf(column);
+      if (colIdx === -1) continue;
+      const desired = String(params?.newColumnName ?? "").trim();
+      if (!desired || desired === column) continue;
+      const targetCol = uniqueColName(columns, desired);
+      columns = columns.map((c, idx) => (idx === colIdx ? targetCol : c));
+      activeRows = activeRows.map((item) => {
+        const nextData: DataRow = {};
+        for (const [k, v] of Object.entries(item.data)) {
+          nextData[k === column ? targetCol : k] = v;
+        }
+        return { ...item, data: nextData };
+      });
+      continue;
+    }
+
+    if (kind === "split_into_two_columns") {
+      const colIdx = columns.indexOf(column);
+      if (colIdx === -1) continue;
+      const sep = String(params?.separator ?? "-");
+      const defaultLeft = column.includes("_") ? column.split("_")[0] : `${column}_1`;
+      const defaultRight = column.includes("_")
+        ? column.split("_").slice(1).join("_")
+        : `${column}_2`;
+      const leftCol = uniqueColName(columns, String(params?.leftCol ?? defaultLeft));
+      const rightCol = uniqueColName([...columns, leftCol], String(params?.rightCol ?? defaultRight));
+
+      columns = [
+        ...columns.slice(0, colIdx + 1),
+        leftCol,
+        rightCol,
+        ...columns.slice(colIdx + 1),
+      ];
+      activeRows = activeRows.map((item) => {
+        const val = item.data[column] ?? "";
+        const parts = val.split(sep);
+        const leftVal = (parts[0] ?? "").trim();
+        const rightVal = (parts.length > 1 ? parts.slice(1).join(sep) : "").trim();
+        return {
+          ...item,
+          data: {
+            ...item.data,
+            [leftCol]: leftVal,
+            [rightCol]: rightVal,
+          },
+        };
+      });
+      continue;
+    }
+
+    if (kind === "split_mexican_name") {
+      const colIdx = columns.indexOf(column);
+      if (colIdx === -1) continue;
+      const colNombres = uniqueColName(columns, "Nombre(s)");
+      const colPaterno = uniqueColName([...columns, colNombres], "Apellido_Paterno");
+      const colMaterno = uniqueColName(
+        [...columns, colNombres, colPaterno],
+        "Apellido_Materno"
+      );
+
+      columns = [
+        ...columns.slice(0, colIdx + 1),
+        colNombres,
+        colPaterno,
+        colMaterno,
+        ...columns.slice(colIdx + 1),
+      ];
+      activeRows = activeRows.map((item) => {
+        const parsed = splitLatinAmericanName(item.data[column] ?? "");
+        return {
+          ...item,
+          data: {
+            ...item.data,
+            [colNombres]: parsed.nombres,
+            [colPaterno]: parsed.apellidoPaterno,
+            [colMaterno]: parsed.apellidoMaterno,
+          },
+        };
+      });
+      continue;
+    }
 
     if (kind === "delete_row") {
       const targetOrigIdx = Number(params?.origIdx ?? params?.rowIndex ?? -1);
@@ -773,5 +1078,5 @@ export function replayRecipeWithTrash(
     });
   }
 
-  return { activeRows, trash };
+  return { columns, hiddenColumns, activeRows, trash };
 }

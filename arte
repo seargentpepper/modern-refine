@@ -1,0 +1,153 @@
+Identidad mínima, lo indispensable
+
+1. Nombre y tagline
+
+    Nombre: Modern Refine (sin guion, sin mayúsculas raras)
+    Tagline: “De crudo a pulido.” / en inglés: “From raw to refined.”
+    Esto va en el README, en el hero y en el footer. Repetirlo en los 3 lados es lo que hace que se sienta producto.
+
+3. Tipografía, solo 2
+
+    Títulos: Inter Bold / Space Grotesk, si quieres verte más “producto dev”.
+    Cuerpo / UI: Inter Regular.
+    Código: JetBrains Mono o IBM Plex Mono.
+
+4. Voz
+
+    Frases cortas, verbos de acción, cero jerga corporativa.
+    Mal: “Nuestra solución innovadora optimiza flujos de trabajo…”
+    Bien: “Pega lo crudo. Sal pulido.”
+    Los estados vacíos, errores y botones hablan igual. Ahí es donde la mayoría de las apps se delatan como demo.
+
+5. Los 5 artefactos que hacen que se vea real
+
+    README con screenshot real + badge de versión + “Quick start” en 3 pasos que sí funcione copiando y pegando.
+    Landing de una sola pantalla: logo, tagline, 1 screenshot, 1 CTA, 3 bullets. Nada de scroll infinito.
+    Favicon con esta misma R (sin texto).
+    Estado vacío diseñado, no un “No data” gris. Ejemplo: “Nada que refinar todavía. Pega tu primer input.”
+    Página de error / 404 con la misma voz: “Esto todavía está crudo. Volver al inicio.”
+
+    1. Tipografía — el sistema completo
+
+Usa solo 2 familias, no más.
+
+Títulos: Space Grotesk
+
+    Es la que le da el look startup, geométrica, moderna, combina perfecto con tu mR redondeado.
+    Siempre en Bold 700.
+    Siempre en minúscula: modern refine, pule tu trabajo, nunca Modern Refine.
+    Tracking: -3% a -5% — letras más juntas. Este es el detalle que hace que se vea diseñado y no como plantilla.
+    Leading: 95% a 105% — títulos casi pegados entre líneas, se ve más compacto y con más fuerza.
+
+Tamaños para landing:
+
+    Hero H1: 64px desktop / 40px móvil
+    H2 secciones: 40px / 30px móvil
+    H3 cards: 20px
+
+Cuerpo / UI: Inter
+
+    Regular 400 para párrafos.
+    Medium 500 para botones y labels.
+    Leading: 150% — aire para leer, al contrario de los títulos.
+    Tamaño base: 16px / 18px para el párrafo del hero.
+
+Regla de oro: Un H1, un solo mensaje. No pongas 2 titulares compitiendo. Ejemplo:
+
+    de crudo a refinado.
+    Sub: Pega lo que tienes. Sal con algo listo para publicar.
+
+2. Color aplicado a la landing
+
+Ya tienes la paleta, ahora dónde va cada uno:
+
+    Fondo general: #070812
+    Fondo secciones alternas: #0C0E1A — un poquito más claro, para que se sienta el cambio sin usar otro color.
+    Texto principal: #F2F3FF
+    Texto secundario: #9A9DB8
+    Degradado de marca: #4CE8C2 → #22B8E8 → #6B6BF2 → #7A5CFF
+
+Usos prohibidos:
+
+    No fondo blanco completo, tu marca vive en oscuro.
+    No texto menta sobre fondo claro, se pierde.
+    No degradado vertical, siempre horizontal de izquierda a derecha.
+
+Botones:
+
+    Primario: fondo degradado, texto blanco, radio 999px (píldora completa), padding 14px 28px.
+    Secundario: fondo #12131F, borde #1E2030, texto blanco.
+    Solo un primario por pantalla. Si pones dos, ninguno es primario.
+
+3. Estructura de la landing — en este orden
+
+No inventes secciones, esta es la que convierte:
+
+1. Nav — lo mínimo
+Logo mR a la izquierda, a la derecha solo 2 links + 1 botón primario. Nada de menú de 6 opciones.
+[ mR ] Features Pricing [ Empezar → ]
+
+2. Hero — 1 pantalla, sin scroll
+
+    Badge chiquito arriba: ● v1.0 — ya disponible en cian.
+    H1 en 2 líneas máximo.
+    1 párrafo de 1 línea y media.
+    2 botones: primario + secundario.
+    Abajo: screenshot real de la app, no mockup genérico. Con borde #1E2030 y radio 16px, y una sombra suave violeta.
+    Detrás del screenshot, un glow del degradado muy sutil, al 20% de opacidad. No más, si no se ve barato.
+
+3. Prueba social — 1 línea
+No pongas logos falsos. Mejor:
+Usado para refinar +1,200 textos esta semana o 3 testimonios cortos de 1 línea.
+Si no tienes datos reales, omite esta sección. Un dato falso se nota.
+
+4. Cómo funciona — 3 pasos, no 4
+
+    01 Pega — lo crudo
+    02 Refina — la app trabaja
+    03 Publica — listo
+    Cada paso con número en degradado, título en 20px y 1 línea de texto. Los 3 en la misma fila en desktop.
+
+5. Features — máximo 3
+No 6 cards. 3 es memorable, 6 es plantilla.
+Cada card: icono simple en degradado, título, 1 línea. Fondo #12131F, borde #1E2030, radio 16px.
+
+6. Demo / Antes - Después
+Esta es tu sección estrella para modern refine. Muestra un antes gris y un después con degradado. El usuario tiene que ver la transformación en 3 segundos.
+
+7. Pricing — si aplica
+Si es gratis al inicio, dilo claro: Gratis por ahora. No escondas el precio.
+
+8. CTA final — repite el hero
+Mismo H1 pero más corto, mismo botón primario. Fondo con degradado muy sutil.
+Ejemplo: ¿Listo para refinar?
+
+9. Footer — mínimo
+mR + © 2026 modern refine + 2 links: GitHub y X. Nada más.
+4. Detalles que hacen que se vea producto real
+
+Estos son los que la mayoría olvida:
+
+    Espaciado: 120px entre secciones en desktop, 64px en móvil. Si todo está pegado, se ve barato.
+    Ancho máximo: 1120px para contenido, 1280px para hero. Nunca full-width de texto.
+    Bordes: siempre 1px, color #1E2030, radio 16px en cards, 999px en botones y badges.
+    Sombras: solo una, sutil y violeta: 0 20px 60px rgba(107,107,242,0.15). Nada de sombras negras duras.
+    Animación: solo una. Que el degradado del H1 o del botón se mueva muy lento, o que el screenshot entre con fade-up. Si todo se mueve, nada se siente premium.
+    Favicon: solo el monograma mR, no el nombre.
+    Meta / OG image: el hero con el logo y el H1, para que cuando compartas el link en X o Discord se vea como producto.
+    Estado vacío y error: si tu landing tiene demo, que el estado vacío diga Nada que refinar todavía. y no No data.
+    Mobile first en el hero: si el hero no se ve bien en móvil, no importa que en desktop se vea increíble. El 70% lo va a ver en móvil.
+
+5. Checklist antes de publicar
+
+Antes de decir “ya quedó”, revisa esto:
+
+    ¿Se entiende en 3 segundos qué hace?
+    ¿Hay solo 1 botón primario en el hero?
+    ¿El screenshot es real, no un mockup de Figma?
+    ¿No hay Lorem ipsum en ningún lado?
+    ¿Se lee bien en móvil?
+    ¿El degradado siempre va en el mismo orden?
+    ¿La tipografía es solo Space Grotesk + Inter?
+
+Si las 7 son sí, ya tienes landing de startup. 

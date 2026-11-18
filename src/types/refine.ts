@@ -26,6 +26,12 @@ export type TransformKind =
   | "pad_postal_code"
   | "split_keep_left"
   | "split_keep_right"
+  | "duplicate_column"
+  | "rename_column"
+  | "hide_column"
+  | "restore_column"
+  | "split_into_two_columns"
+  | "split_mexican_name"
   | "standardize_dates"
   | "fill_empty_default"
   | "fill_down"
@@ -90,4 +96,20 @@ export interface FileIngestionMeta {
   dedupedHeaders: number;
   sheets?: string[];
   activeSheet?: string;
+}
+
+export interface TableSession {
+  id: string;
+  fileName: string;
+  baseColumns: string[];
+  baseRows: DataRow[];
+  ingestionMeta: FileIngestionMeta | null;
+  steps: RefineStep[];
+  redoStack: RefineStep[];
+  selectedColumn: string;
+  selectionMode: "column" | "cell";
+  sortState: { column: string; dir: "asc" | "desc" } | null;
+  facetFilter: string | null;
+  filterAlias: string;
+  selectedCell: { visibleIdx: number; colIdx: number } | null;
 }

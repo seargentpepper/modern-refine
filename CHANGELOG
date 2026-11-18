@@ -1,5 +1,30 @@
 # Historial de Cambios — ModernRefine
 
+## [0.3.0] — Fase 3 (Semana 3 y 4: Multi-Sesión, Acordeones, Nombres LatAm y Virtualización)
+
+> **En pocas palabras:** ModernRefine evoluciona a una estación multi-archivo con pestañas independientes (`TableSession[]`), historial agrupado en acordeones con checkbox maestro, separador inteligente de nombres latinoamericanos en 3 columnas, ocultación no destructiva de columnas, paginación virtualizada para tablas masivas y puente híbrido hacia Rust (`tauriBridge.ts`).
+
+### Multi-Sesión y Ergonomía de Interfaz (`src/App.tsx`, `src/App.css`)
+- **Sesiones independientes por pestaña (`TableSession[]`):** Apertura simultánea de múltiples archivos (`.csv`, `.tsv`, `.xlsx`, `.xls`, `.ods`, `.json`) y plantillas, conservando cada pestaña su propio historial, pila `Deshacer / Rehacer`, papelera, ordenamiento y columna activa.
+- **Barra superior en una sola línea e iconografía oficial:** Integrado el logo oficial `mR_harmonia_cutout.png`, añadido el botón `Cerrar` (`Alt+W`), menús desplegables unificados para **`Recetas ▾`** y **`Exportar ▾`**, y atajos de teclado mostrados limpiamente en los tooltips (`title`).
+- **Ordenamiento por tipo en cabeceras (`<th>`):** Botón `↕ / ↑ / ↓` que ordena numéricamente, cronológicamente o alfabéticamente dejando vacíos al final.
+- **Reubicación de `Deshacer` y `Rehacer`:** Colocados directamente en el panel derecho entre la cabecera `HISTORIAL Y PAPELERA` y las pestañas `Pasos | Papelera | Receta`.
+- **Historial en acordeones por columna/tarea:** Agrupación automática con **checkbox maestro** para activar/desactivar tareas completas en tiempo real y borrado grupal o individual.
+
+### Estructura de Columnas y Separador de Nombres Latinoamericanos (`src/lib/refineEngine.ts`, `src-rust/src/lib.rs`)
+- **Menú de ancho completo `Estructura y División de Columna`:**
+  - `Duplicar columna` (`Alt+D`), `Renombrar columna...` (`Alt+R`), `Borrar (desaparecer) columna` (`Alt+X`, no destructivo y recuperable desde `Papelera`), `Dividir en 2 columnas (por "-")` (`Alt+2`), `Conservar izquierda` (`Alt+I`), `Conservar derecha` (`Alt+U`) y `Separar en Nombre(s) + 2 Apellidos` (`Alt+N`).
+- **Separador de nombres en 3 columnas (`Nombre(s)`, `Apellido_Paterno`, `Apellido_Materno`):** Agrupa partículas compuestas (`de`, `del`, `de la`, `vda.`) y distingue nombres dobles (`Juan Carlos Méndez`, `María Fernanda Ruiz`) de nombres simples con dos apellidos (`Ana López Pérez`) usando búsqueda $O(1)$ en tablas hash.
+
+### Virtualización y Contenedor de Escritorio Nativo Tauri v2 (`src-tauri/`, `src/lib/tauriBridge.ts`, `src-rust/src/lib.rs`, `src/App.css`)
+- **Ejecución como ventana nativa independiente (Windows, macOS y Linux):** Configurado `modern-refine/src-tauri` con Tauri v2 (`@tauri-apps/cli`, `@tauri-apps/api`, `@tauri-apps/plugin-opener`, `@tauri-apps/plugin-dialog`). Corre tanto en ventana nativa dedicada (`npm run dev:desktop` / `npm run tauri dev`) como en navegador (`npm run dev`).
+- **Diálogo nativo "Guardar como..." multiplataforma:** Integrado `tauri-plugin-dialog` y el comando Rust `write_export_file` para que **Exportar XLSX**, **Exportar CSV** y **Guardar Receta** abran el explorador nativo del sistema operativo en Desktop (con fallback a descarga web en navegador).
+- **Barras de desplazamiento azul oscuro consistentes:** Estilizado global en `src/App.css` (`color-scheme: dark`, `scrollbar-color` estándar y `::-webkit-scrollbar*`) para eliminar barras claras del sistema operativo en todos los paneles.
+- **Paginación virtualizada (`PAGE_SIZE = 100`):** Monta como máximo 100 filas en el DOM por bloque con sincronización automática al navegar con flechas, manteniendo el diseño idéntico en tablas pequeñas y evitando bloqueos en archivos de 500k+ filas.
+- **Paridad e invocación directa en crate Rust (`modern_refine_engine`):** Conectados los comandos de Tauri `refine_cluster` y `refine_split_latin_name` al motor Rust nativo a través de `src/lib/tauriBridge.ts`.
+
+---
+
 ## [0.2.0] — Fase 2 (Semana 2 y 3: Motor 5-Niveles, Excel Nativo y Rust)
 
 > **En pocas palabras:** ModernRefine da el salto a los 5 algoritmos de clustering (incluyendo Fonético en Español y N-gram), suma limpieza de teléfonos/monedas/códigos postales/separación de columnas, abre y exporta libros Excel (`.xlsx`/`.ods`) con selector de hojas, e incorpora el crate nativo en Rust (`modern_refine_engine`).

@@ -3,6 +3,7 @@
 }
 
 :root {
+  color-scheme: dark;
   --bg-root: #1e1e1e;
   --bg-panel: #252526;
   --bg-elevated: #2d2d2d;
@@ -13,12 +14,49 @@
   --text-dim: #808080;
   --accent: #007acc;
   --accent-soft: rgba(0, 122, 204, 0.18);
+  --scrollbar-track: #161b22;
+  --scrollbar-thumb: #1f4b7a;
+  --scrollbar-thumb-hover: #2c6cb0;
+  --scrollbar-thumb-active: #007acc;
   --warn: #eab308;
   --warn-soft: rgba(234, 179, 8, 0.14);
   --danger: #f87171;
   --danger-soft: rgba(248, 113, 113, 0.14);
   --ok: #34d399;
   --ok-soft: rgba(52, 211, 153, 0.14);
+}
+
+/* Barras de desplazamiento azul oscuro consistentes en Windows, macOS y Linux */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: 999px;
+  border: 2px solid var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+}
+
+*::-webkit-scrollbar-thumb:active {
+  background-color: var(--scrollbar-thumb-active);
+}
+
+*::-webkit-scrollbar-corner {
+  background: var(--scrollbar-track);
 }
 
 html,
@@ -715,4 +753,308 @@ body,
   justify-content: space-between;
   gap: 10px;
   flex-shrink: 0;
+}
+
+/* Topbar Single-Line Stability & Dropdown Menus */
+.mr-brand,
+.mr-logo,
+.mr-badge,
+.mr-file-pill,
+.mr-btn {
+  white-space: nowrap;
+}
+
+.mr-brand {
+  min-width: 0;
+}
+
+.mr-file-pill {
+  max-width: 310px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mr-logo-img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.mr-dropdown {
+  position: relative;
+  display: inline-block;
+}
+
+.mr-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 240px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+  padding: 4px;
+  z-index: 100;
+}
+
+.mr-dropdown-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-main);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.mr-dropdown-item:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.mr-dropdown-item:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.mr-kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--bg-root);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+/* Column Header Sort Button */
+.mr-th-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.mr-sort-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+}
+
+.mr-sort-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+}
+
+.mr-sort-btn.active {
+  background: rgba(96, 165, 250, 0.25);
+  color: #ffffff;
+  border-color: rgba(96, 165, 250, 0.6);
+}
+
+/* Full-Width Aesthetics for Left Panel Column Menu */
+.mr-col-dropdown {
+  position: relative;
+  width: 100%;
+  margin-top: 2px;
+}
+
+.mr-col-dropdown-trigger {
+  width: 100%;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+  border-radius: 5px;
+  border: 1px solid rgba(96, 165, 250, 0.38);
+  background: rgba(0, 122, 204, 0.12);
+  color: #93c5fd;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mr-col-dropdown-trigger:hover {
+  background: rgba(0, 122, 204, 0.22);
+  border-color: rgba(96, 165, 250, 0.65);
+  color: #ffffff;
+}
+
+.mr-col-dropdown-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  width: 100%;
+  background: #202022;
+  border: 1px solid #454545;
+  border-radius: 6px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.55);
+  padding: 5px;
+  z-index: 120;
+}
+
+.mr-col-dropdown-panel .mr-dropdown-item {
+  padding: 7px 8px;
+  font-size: 11.5px;
+  border-radius: 4px;
+  white-space: normal;
+  line-height: 1.25;
+}
+
+.mr-menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 2px;
+}
+
+/* History Undo/Redo Bar between Header and Tabs */
+.mr-history-undo-bar {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.mr-history-undo-bar .mr-btn {
+  width: 100%;
+  justify-content: center;
+  height: 30px;
+}
+
+/* Multi-Table Session Tabs */
+.mr-session-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px 0;
+  background: #1a1a1c;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.mr-session-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 6px 6px 0 0;
+  border: 1px solid transparent;
+  border-bottom: none;
+  background: #232325;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mr-session-tab:hover {
+  background: var(--bg-elevated);
+  color: var(--text-main);
+}
+
+.mr-session-tab.active {
+  background: var(--bg-panel);
+  color: #ffffff;
+  border-color: var(--border);
+  border-top: 2px solid var(--accent);
+}
+
+.mr-session-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0;
+}
+
+.mr-session-close:hover {
+  background: rgba(248, 113, 113, 0.22);
+  color: #fca5a5;
+}
+
+/* History Accordion Groups */
+.mr-acc-group {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+
+.mr-acc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 7px 9px;
+  background: #2a2a2d;
+  cursor: pointer;
+  user-select: none;
+}
+
+.mr-acc-header:hover {
+  background: #323236;
+}
+
+.mr-acc-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 700;
+  min-width: 0;
+  flex: 1;
+}
+
+.mr-acc-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: #93c5fd;
+  flex-shrink: 0;
+}
+
+.mr-acc-body {
+  padding: 6px;
+  border-top: 1px solid var(--border);
+  background: #212123;
+}
+
+.mr-acc-body .mr-step-card {
+  margin-bottom: 5px;
+}
+
+.mr-acc-body .mr-step-card:last-child {
+  margin-bottom: 0;
 }

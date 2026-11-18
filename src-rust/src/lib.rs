@@ -1,7 +1,7 @@
 use calamine::{open_workbook_auto, Data, Reader};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use unicode_normalization::char::is_combining_mark;
 use unicode_normalization::UnicodeNormalization;
 
@@ -28,6 +28,21 @@ pub struct ClusterGroup {
     pub method: ClusterMethod,
     pub suggested_canonical: String,
     pub variants: Vec<ClusterVariant>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SplitNameResult {
+    pub nombres: String,
+    pub apellido_paterno: String,
+    pub apellido_materno: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaginatedWindow {
+    pub total_rows: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub rows: Vec<HashMap<String, String>>,
 }
 
 /// Quita acentos/diacríticos Unicode (NFD)
@@ -83,11 +98,11 @@ pub fn spanish_phonetic_key(val: &str) -> String {
             continue;
         }
         let mapped = match ch {
-            'h' => continue, // h muda en español
+            'h' => continue,
             'v' => 'b',
             'z' => 's',
             'c' => 'k',
-            'x' => 'j', // Xalapa <-> Jalapa, Oaxaca <-> Oajaca
+            'x' => 'j',
             other => other,
         };
         if prev != Some(mapped) {
@@ -134,7 +149,6 @@ pub fn cluster_unique_facets(column: &str, facets: &[(String, usize)]) -> Vec<Cl
         return Vec::new();
     }
 
-    // Generar pares candidatos en paralelo con rayon
     let pairs: Vec<(usize, usize, ClusterMethod)> = (0..n)
         .into_par_iter()
         .flat_map(|i| {
@@ -190,7 +204,6 @@ pub fn cluster_unique_facets(column: &str, facets: &[(String, usize)]) -> Vec<Cl
         })
         .collect();
 
-    // Union-Find sobre los pares detectados
     let mut parent: Vec<usize> = (0..n).collect();
     let mut method_map: HashMap<usize, ClusterMethod> = HashMap::new();
 
@@ -231,7 +244,7 @@ pub fn cluster_unique_facets(column: &str, facets: &[(String, usize)]) -> Vec<Cl
 
         let suggested_canonical = variants
             .iter()
-            .max_by_key(|v| ( !v.value.contains('.'), v.count ))
+            .max_by_key(|v| (!v.value.contains('.'), v.count))
             .map(|v| v.value.trim().to_string())
             .unwrap_or_default();
 
@@ -243,6 +256,110 @@ pub fn cluster_unique_facets(column: &str, facets: &[(String, usize)]) -> Vec<Cl
         });
     }
     out
+}
+
+/// Separador inteligente de nombres latinoamericanos en las 3 columnas clásicas
+pub fn split_latin_american_name(raw: &str) -> SplitNameResult {
+    let words: Vec<&str> = raw.split_whitespace().collect();
+    if words.is_empty() {
+        return SplitNameResult {
+            nombres: String::new(),
+            apellido_paterno: String::new(),
+            apellido_materno: String::new(),
+        };
+    }
+
+    let connectors: HashSet<&str> = [
+        "de", "del", "la", "las", "los", "san", "santa", "y", "vda", "vda.", "viuda", "mc", "mac",
+    ]
+    .into_iter()
+    .collect();
+
+    let second_names: HashSet<&str> = [
+        "carlos", "luis", "miguel", "angel", "fernanda", "fernando", "alberto", "antonio",
+        "manuel", "jose", "maria", "guadalupe", "sofia", "elena", "isabel", "alejandro",
+        "alejandra", "eduardo", "enrique", "francisco", "javier", "daniel", "daniela", "pablo",
+        "paola", "andrea", "gabriela", "carmen", "rosa", "luz", "jesus", "arturo", "armando",
+        "cesar", "david", "emilio", "esteban", "fabiola", "gerardo", "hector", "hugo", "ignacio",
+        "ivan", "jorge", "julio", "laura", "leticia", "liliana", "lorena", "lucia", "martha",
+        "martin", "mauricio", "monica", "natalia", "norma", "oscar", "patricia", "paul", "pedro",
+        "rafael", "omar", "ramon", "raul", "ricardo", "roberto", "rocio", "rodolfo", "rodrigo",
+        "ruben", "salvador", "sandra", "santiago", "sergio", "silvia", "teresa", "veronica",
+        "victor", "victoria", "ximena", "yolanda",
+    ]
+    .into_iter()
+    .collect();
+
+    let mut blocks: Vec<String> = Vec::new();
+    let mut prefix_buf: Vec<&str> = Vec::new();
+
+    for (i, &w) in words.iter().enumerate() {
+        let norm = strip_diacritics(&w.to_lowercase());
+        if connectors.contains(norm.as_str()) && i + 1 < words.len() {
+            prefix_buf.push(w);
+        } else if !prefix_buf.is_empty() {
+            prefix_buf.push(w);
+            let combined = prefix_buf.join(" ");
+            prefix_buf.clear();
+            blocks.push(combined);
+        } else {
+            blocks.push(w.to_string());
+        }
+    }
+    if !prefix_buf.is_empty() {
+        blocks.push(prefix_buf.join(" "));
+    }
+
+    match blocks.len() {
+        1 => SplitNameResult {
+            nombres: blocks[0].clone(),
+            apellido_paterno: String::new(),
+            apellido_materno: String::new(),
+        },
+        2 => SplitNameResult {
+            nombres: blocks[0].clone(),
+            apellido_paterno: blocks[1].clone(),
+            apellido_materno: String::new(),
+        },
+        3 => {
+            let second_norm = strip_diacritics(&blocks[1].to_lowercase());
+            if !blocks[0].contains(' ') && second_names.contains(second_norm.as_str()) {
+                SplitNameResult {
+                    nombres: format!("{} {}", blocks[0], blocks[1]),
+                    apellido_paterno: blocks[2].clone(),
+                    apellido_materno: String::new(),
+                }
+            } else {
+                SplitNameResult {
+                    nombres: blocks[0].clone(),
+                    apellido_paterno: blocks[1].clone(),
+                    apellido_materno: blocks[2].clone(),
+                }
+            }
+        }
+        len => SplitNameResult {
+            nombres: blocks[..len - 2].join(" "),
+            apellido_paterno: blocks[len - 2].clone(),
+            apellido_materno: blocks[len - 1].clone(),
+        },
+    }
+}
+
+/// Paginación virtualizada para ventanas de alta densidad (500k+ filas)
+pub fn paginate_rows(
+    rows: &[HashMap<String, String>],
+    offset: usize,
+    limit: usize,
+) -> PaginatedWindow {
+    let total_rows = rows.len();
+    let start = offset.min(total_rows);
+    let end = (start + limit).min(total_rows);
+    PaginatedWindow {
+        total_rows,
+        offset: start,
+        limit,
+        rows: rows[start..end].to_vec(),
+    }
 }
 
 /// Lectura nativa de hojas Excel (.xlsx, .ods, .xls) mediante calamine
@@ -326,5 +443,23 @@ mod tests {
         ];
         let clusters = cluster_unique_facets("Ciudad", &facets);
         assert_eq!(clusters.len(), 3);
+    }
+
+    #[test]
+    fn test_split_latin_american_names() {
+        let n1 = split_latin_american_name("ana lópez pérez");
+        assert_eq!(n1.nombres, "ana");
+        assert_eq!(n1.apellido_paterno, "lópez");
+        assert_eq!(n1.apellido_materno, "pérez");
+
+        let n2 = split_latin_american_name("JUAN CARLOS MÉNDEZ");
+        assert_eq!(n2.nombres, "JUAN CARLOS");
+        assert_eq!(n2.apellido_paterno, "MÉNDEZ");
+        assert_eq!(n2.apellido_materno, "");
+
+        let n3 = split_latin_american_name("Patricia de la Cruz Ríos");
+        assert_eq!(n3.nombres, "Patricia");
+        assert_eq!(n3.apellido_paterno, "de la Cruz");
+        assert_eq!(n3.apellido_materno, "Ríos");
     }
 }
