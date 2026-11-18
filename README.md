@@ -4,9 +4,7 @@
 
 <h1 align="center">ModernRefine</h1>
 
-<p align="center">
-  <b>Estación de limpieza de datos (<i>Pre-BI Cleaning Station</i>) minimalista y <i>local-first</i>: una reimplementación nativa de OpenRefine en Tauri v2, Rust y React, nacida como ejercicio independiente dentro del ecosistema Analyticraft.</b>
-</p>
+**Estación de limpieza de datos (*Pre-BI Cleaning Station*) minimalista y *local-first*: una reimplementación nativa de OpenRefine en Tauri v2, Rust y React, nacida como ejercicio independiente dentro del ecosistema [Analyticraft](https://seargentpepper.github.io/Analyticraft/).**
 
 <p align="center">
   Diseñada para transformar archivos CSV, TSV, Excel y JSON masivos o sucios en tablas confiables en menos de 10 minutos, sin escribir una sola línea de código, sin miedo a perder información y dejando una receta reproducible (<code>.refine.json</code>). Corre de forma nativa en Windows, macOS y Linux.
@@ -111,4 +109,4 @@ Se abrirá en `http://localhost:5174`. Puedes abrir cualquier archivo `.csv`, `.
 
 - [CHANGELOG](CHANGELOG) — Historial detallado de versiones y cambios técnicos.
 - [AGENTS.md](AGENTS.md) — Convenciones y guía técnica para desarrollo.
-- [README de Analyticraft](../README.md) — Proyecto principal del ecosistema.
+- [README de Analyticraft](https://github.com/seargentpepper/Analyticraft) — Proyecto principal del ecosistema.
