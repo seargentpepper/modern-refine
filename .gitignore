@@ -1,0 +1,7 @@
+node_modules/
+dist/
+src-rust/target/
+*.local.csv
+*.private.csv
+*.local.xlsx
+*.private.xlsx

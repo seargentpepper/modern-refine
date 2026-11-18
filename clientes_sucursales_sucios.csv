@@ -1,0 +1,35 @@
+ID_Cliente,Nombre_Cliente,Ciudad,Estado,Codigo_Postal,Fecha_Alta,Monto_MXN,Telefono,Segmento_Zona
+C-001,"  ana lópez pérez ",Villahermosa,Tabasco,86000,2025-01-14,14500,"(993) 312-4455",Mayorista - Sur
+C-002,JUAN CARLOS MÉNDEZ,VillaHermosa,Tab.,8610,14/01/2025,8200,993-145-8890,PyME - Sur
+C-003,maría fernanda ruiz,Vhsa,Tabasco,86035,2025-02-03,19300,993 201 3344,Corporativo - Sur
+C-004,Pedro   Gómez,V. Hermosa,tabasco,8600,30/02/2025,6400,Tel: 9931902211,Menudeo - Sur
+C-005,Sofía Ramírez,Villahermosa Tab.,TABASCO,86150,2025-02-18,11200,(993) 410-9988,Mayorista - Sur
+C-006,Luis Ángel Torres,Villahermsoa,Tabasco,86040,2025-03-01,9850,993.315.7766,PyME - Sur
+C-007,carmen hernández,,Tabasco,,2025-03-05,4100,,Menudeo - Sur
+C-008,Roberto Díaz,CDMX,Ciudad de México,6600,2025-03-11,27500,(55) 5211-3300,Corporativo - Centro
+C-009,VALERIA CASTRO,Cd. de México,CDMX,1000,15/13/2025,18900,55-4321-8765,Mayorista - Centro
+C-010,Diego Morales,cdmx,Cdmx,3100,2025-04-02,12400,55 1987 6543,PyME - Centro
+C-011,Lucía Herrera,Ciudad de Mexico,CDMX,11000,2025-04-09,15100,Tel. 5556781234,PyME - Centro
+C-012,Fernando Navarro,Mérida,Yucatán,97000,2025-04-12,22300,(999) 924-1122,Corporativo - Península
+C-013,paola sánchez,Merida,Yucatan,97100,2025-04-18,7600,999-310-4567,Menudeo - Península
+C-014,Héctor Vázquez,  merida ,Yucatán,97050,sin fecha,5400,999 812 9001,Menudeo - Península
+C-015,Andrea Jiménez,Villahermosa,Tabasco,86070,2025-05-01,16800,(993) 354-1209,Mayorista - Sur
+C-016,Óscar Mendoza,Vhsa,,86020,2025-05-04,13200,993-288-4100,PyME - Sur
+C-017,Gabriela Reyes,V. Hermosa,Tabasco,86080,2025-05-09,9100,993 112 7890,Menudeo - Sur
+C-018,Martín Cruz,,Tabasco,86190,2025-05-15,10500,993-400-5511,PyME - Sur
+C-019,Patricia Solís,Biya Hermosa,Tabasco,86010,14 de marzo de 2025,"$15,750.00",(993) 512-0091,Mayorista - Sur
+C-020,RICARDO PEÑA,Billa Ermosa,tab.,8600,19-abr-2025,11400,Tel: 993-819-3321,PyME - Sur
+C-021,ónica Domínguez,hermosa villa,Tabasco,86120,45762,21900,993 700 1122,Corporativo - Sur
+C-022,Jorge Alberto Ríos,Xalapa,Veracruz,91000,2025/05/19,13800,(228) 814-2233,PyME - Golfo
+C-023,elena cortés,Jalapa,Ver.,91020,19/05/2025,9450,228-815-9900,Menudeo - Golfo
+C-024,Mauricio Luna,xalapa ver,veracruz,91080,31/04/2025,17600,228 190 4455,Mayorista - Golfo
+C-025,Claudia Vega,Guadalajara,Jalisco,44100,2025-05-22,31200,(33) 3614-7788,Corporativo - Occidente
+C-026,ARTURO SALAZAR,Gaudalajara,Jal.,44120,22-may-2025,"$24,800",33-3825-9012,Mayorista - Occidente
+C-027,Beatriz Ochoa,Guadalaraja,jalisco,44200,45790,14900,33 1092 3847,PyME - Occidente
+C-028,Daniela Montes,Gdl,Jalisco,44600,2025-05-28,18300,(33) 3120-5544,PyME - Occidente
+C-029,Francisco Ibarra,Cancún,Quintana Roo,77500,2025-06-01,29400,(998) 884-3210,Corporativo - Caribe
+C-030,mariana flores,Kankun,Q. Roo,77510,01/06/2025,12750,998-210-6543,PyME - Caribe
+C-031,Raúl Cervantes,Cancun,Quintana Roo,77530,2 de junio de 2025,16200,998 411 2299,Mayorista - Caribe
+C-032,Verónica Treviño,Monterrey,Nuevo León,64000,2025-06-05,38500,(81) 8340-1100,Corporativo - Norte
+C-033,GUSTAVO GARZA,Monetrrey,N.L.,64010,05-06-2025,"$42,100.00",81-8345-6789,Corporativo - Norte
+C-034,Adriana Elizondo,Mty,Nuevo Leon,64100,2025/06/08,21400,81 1234 9876,Mayorista - Norte

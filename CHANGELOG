@@ -1,0 +1,54 @@
+# Historial de Cambios — ModernRefine
+
+## [0.2.0] — Fase 2 (Semana 2 y 3: Motor 5-Niveles, Excel Nativo y Rust)
+
+> **En pocas palabras:** ModernRefine da el salto a los 5 algoritmos de clustering (incluyendo Fonético en Español y N-gram), suma limpieza de teléfonos/monedas/códigos postales/separación de columnas, abre y exporta libros Excel (`.xlsx`/`.ods`) con selector de hojas, e incorpora el crate nativo en Rust (`modern_refine_engine`).
+
+### Clustering de 5 Niveles y Transformaciones Avanzadas (`src/lib/refineEngine.ts`, `src/App.tsx`)
+- **5 algoritmos activos en cascada:** *Fingerprint*, *N-gram Fingerprint* (bigramas), *Fonético ES* (`spanishPhoneticKey`), *Levenshtein* y *Abreviatura*, con filtro rápido por método dentro de la pestaña `Clústeres`.
+- **Nuevas transformaciones en 1 clic:**
+  - `Solo números` (`extract_numbers`): limpia símbolos de moneda (`"$15,750.00"` → `"15750.00"`) y teléfonos (`"Tel: (993) 312-4455"` → `"9933124455"`).
+  - `CP 5 dígitos (0...)` (`pad_postal_code`): restaura ceros iniciales comidos por Excel (`8600` → `08600`) con chip diagnóstico `X CP sin cero inicial`.
+  - `Separar izq (-)` (`split_keep_left`): extrae la categoría principal en columnas compuestas como `Segmento_Zona`.
+- **Ingesta inteligente:** Auto-detección de separador (`,`, `;`, `\t`, `|`) y deduplicación automática de encabezados repetidos.
+
+### Soporte Excel Multi-Hoja y Datos de Prueba (`clientes_sucursales_sucios.csv`)
+- **Importación y exportación Excel:** Lectura directa de `.xlsx`, `.xls` y `.ods` con selector de hoja en la barra superior y botón **`Exportar XLSX`** junto a `Exportar CSV`.
+- **Plantilla ampliada sin romper recetas previas:** `clientes_sucursales_sucios.csv` crece a **34 filas y 9 columnas** (`Codigo_Postal`, `Telefono`, `Segmento_Zona`, variantes fonéticas `Biya Hermosa` / `Jalapa` / `Kankun`, abreviaturas `Gdl` / `Mty` / `Q. Roo`, seriales de Excel `45762` / `45790` y fechas en texto), manteniendo intactas las primeras 18 filas (`C-001` a `C-018`) para compatibilidad total con recetas `.refine.json` guardadas en Fase 1.
+
+### Crate Nativo en Rust (`src-rust/`)
+- Creado `modern_refine_engine` (`calamine 0.38`, `rayon`, `strsim`, `unicode-normalization`, `csv`, `serde`) con clustering paralelo sobre valores únicos y lectura nativa de hojas Excel, verificado con `cargo test` (1/1 test pasando).
+
+---
+
+## [0.1.0-proto] — Cierre de Fase 1 (Semana 1: Prototipo UI)
+
+> **En pocas palabras:** Validada la ergonomía completa de las 3 zonas (*Facetas y Clústeres*, *Tabla Editable* e *Historial / Papelera / Receta JSON*) sobre datos reales sucios, dejando lista la base funcional para conectar el motor Rust + DuckDB en Fase 2.
+
+### Motor Determinista de Recetas y Papelera (`src/lib/refineEngine.ts`)
+- **Identidad estable por fila (`origIdx`):** Cada fila original recibe un índice inmutable `origIdx` al cargarse. Todas las mutaciones (`edit_cell`, `delete_row`, `delete_empty_rows`, `restore_rows`) operan sobre `origIdx`, evitando desplazamientos o corrupción de índices al activar, desactivar o eliminar pasos intermedios.
+- **Reproducción pura (`replayRecipeWithTrash`):** Recalcula desde `baseRows` el estado activo (`activeRows`) y las filas descartadas (`trash`) en cada cambio:
+  - **Activar / Desactivar pasos (`enabled`):** Los pasos desmarcados se omiten en la cadena sin perderse, permitiendo previsualizar su impacto en tiempo real.
+  - **Eliminar paso aislado:** Remover un paso intermedio recalcula limpiamente el resto de la cadena.
+  - **Papelera y restauración (`restore_rows`):** Las filas eliminadas manualmente o por campos críticos vacíos pasan a `Papelera` con su motivo y vista previa, pudiendo restaurarse individualmente o en bloque a su posición original (`sort` por `origIdx`).
+- **Importación y exportación de recetas (`.refine.json`):** `Guardar Receta` exporta el esquema `modern-refine/v1` y `Cargar Receta` rehidrata pasos previos sobre la tabla activa.
+
+### Homologación Masiva de Fechas (`parseCalendarDate`, `standardizeDateValue`)
+- **Detección automática y controles exclusivos (`isDateCol`):** Solo cuando la columna seleccionada es de fecha se habilitan tanto la barra superior de reformateo (`Reformatear toda la columna`) como el bloque `Homologar fechas` del panel izquierdo.
+- **7 patrones de salida:** `iso` (`AAAA-MM-DD`, estándar DuckDB / Analyticraft), `dmy_slash` (`DD/MM/AAAA`), `ymd_slash` (`AAAA/MM/DD`), `dmy_dash` (`DD-MM-AAAA`), `mdy_slash` (`MM/DD/AAAA`), `spanish_short` (`14-ene-2025`) y `spanish_long` (`14 de enero de 2025`).
+- **Normalización de fechas desbordadas (`normalizeAndClampYMD`):** Corrige inversiones `MM/DD` y ajusta días/meses imposibles al límite real del calendario (ej. `30/02/2025` → `28`, `15/13/2025` → mes `12`), garantizando la homologación del 100% de la columna.
+
+### Ergonomía de Interfaz (`src/App.tsx`, `src/App.css`)
+- **Inicio limpio y selector desbloqueado (`src/data/csvTemplates.ts`):** Arranca sin datos de muestra; descubre automáticamente cualquier `.csv` en `modern-refine/*.csv` y permite volver al inicio limpio desde el selector (`— Cerrar tabla (Inicio limpio) —`).
+- **Selección de columna completa:** Hacer clic en la cabecera de una columna resalta todas sus celdas y enfoca sus transformaciones globales.
+- **Selección directa en clústeres:** Cada variante agrupada incluye el botón `Elegir` para fusionar todo el grupo hacia ese valor con un clic, sin escribir texto manualmente.
+- **Controles de texto y facetas:** Botones directos (`MAYÚSCULAS`, `minúsculas`, `Tipo Título`, `Quitar espacios`, `Sin acentos`, `Vacíos → Sin dato`, `Rellenar abajo`, `Eliminar filas vacías`) y renombrado inline de etiquetas de faceta y alias de filtro activo.
+- **Navegación por teclado:** Flechas direccionales (`↑ ↓ ← →`) + `Enter`/`F2` para editar celdas, con resaltado visual de fila y celda activa.
+
+---
+
+### Aprendizajes Clave de Fase 1 (Para Fase 2: Rust + DuckDB)
+1. **No correr Levenshtein sobre fechas ni códigos numéricos:** El algoritmo de distancia de edición agrupaba fechas distintas (`2025-01-14`, `2025-02-03`...) como si fueran errores tipográficos. En Rust se debe mantener la exclusión de columnas de fecha y cadenas con dígitos antes de ejecutar clustering textual.
+2. **Controles contextuales por tipo de columna:** Mostrar herramientas de fechas sobre columnas de texto o IDs genera ruido visual; la UI debe adaptar sus barras de acción según el tipo inferido de la columna activa.
+3. **Índice inmutable `origIdx` desde la ingesta:** Es indispensable para que el historial no lineal (desactivar pasos o restaurar filas de la papelera) funcione sin corromper ediciones posteriores.
+4. **Reparación vs. rechazo estricto en fechas sucias:** En Excel reales aparecen fechas desbordadas (`30/02`, mes `13`); el motor debe ofrecer normalización/ajuste explícito para no dejar filas sueltas sin formato.
