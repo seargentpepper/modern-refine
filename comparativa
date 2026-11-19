@@ -1,0 +1,150 @@
+# Versión limpia y ordenada de tu texto
+
+## La idea central
+
+**No son 2 apps en 1. Son más bien 4 o 5 apps en 1, pegadas con cinta adhesiva.**
+
+Y la intuición es correcta: solo falta separar una cosa que Power BI mezcla y que confunde a todos:
+
+> **Limpiar no es lo mismo que modelar.**
+
+Vamos a desarmarlo.
+
+---
+
+## Power BI Desktop por dentro
+
+Cuando abres Power BI Desktop, en realidad estás abriendo **cinco cosas a la vez**:
+
+### 1. Obtener datos / Get Data
+Es el **importador**. Excel, CSV, SQL, SharePoint, Web, etc.
+Aquí solo eliges la fuente.
+→ **En tu ecosistema:** sería el futuro *Módulo de Importación* de ModernRefine.
+
+### 2. Power Query Editor
+Es el **limpiador / transformador**: quitar columnas, filtrar, dividir, reemplazar, cambiar tipo, Unpivot, Merge, Append.
+Aquí **NO** se hace entidad-relación. Aquí solo se deja cada tabla limpia, una por una.
+→ **En tu ecosistema:** este es **ModernRefine**. Tal cual.
+
+Mucha gente cree que Power Query hace el modelo, pero no. Power Query solo prepara tablas sueltas.
+
+### 3. Vista de Modelo / Model View
+Aquí **sí** está la entidad-relación. Es la pantalla donde ves las cajitas de tablas con líneas entre ellas. Aquí defines:
+- Clientes 1:N Ventas
+- Cuál es la tabla de hechos, cuál es catálogo
+- Dirección del filtro, cardinalidad
+- Jerarquías, como Año > Mes > Día
+
+→ **En tu ecosistema:** esto ya lo tiene **Analyticraft** con su grafo de tablas y su ventana de relaciones.
+
+### 4. Vista de Datos / Data View
+Es la tabla cruda para revisar: ver los datos ya cargados, crear columnas calculadas, verificar que no haya errores.
+→ **En tu ecosistema:** Analyticraft también tiene esto, con su vista de datos read-only.
+
+### 5. Vista de Informe / Report View
+Es el visualizador estilo Dashboard: arrastras campos al lienzo, creas gráficos, segmentadores, tarjetas, tablas; pones filtros, temas.
+→ **En tu ecosistema:** también es **Analyticraft**, con su canvas libre, ECharts, panel de campos y visualizaciones.
+
+### 6. El pedazo que casi nadie menciona al inicio: **DAX**
+
+DAX (Data Analysis Expressions) es el lenguaje de fórmulas para crear:
+- **Medidas:** `Ventas Totales = SUM(Ventas[Monto])`
+- **Columnas calculadas:** `Margen = Ventas - Costo`
+- **Medidas de tiempo:** Ventas Año Anterior, Acumulado YTD
+
+Sin DAX, Power BI sería solo un visualizador bonito. Con DAX se convierte en herramienta de análisis.
+
+→ **En Analyticraft:** no tienes DAX como tal. Tienes filtros, `TRY_CAST`, segmentadores, pero no un motor DAX completo. **Y está bien**, porque para el 90% de pymes, el 90% de DAX se resume en: *suma, conteo, promedio, % del total y acumulado*.
+
+### 7. Y fuera de Desktop: **Power BI Service**
+
+Esto ya no es la app de escritorio, es la nube: publicar el reporte, refresco programado, compartir con otros usuarios, permisos, gateway para conectarse a SQL local.
+
+→ **Tú no necesitas clonar esto.** Tu filosofía es *local-first*. Tu equivalente sería **exportar HTML autocontenido**, que Analyticraft ya hace.
+
+---
+
+## El mapa real
+
+| Power BI | Tu ecosistema |
+|---|---|
+| Get Data | ModernRefine — Módulo Importación (futuro) |
+| Power Query Editor | ModernRefine — Limpiador |
+| Model View / ER | Analyticraft — Grafo + Relaciones |
+| Data View | Analyticraft — Vista de Datos |
+| Report View / Dashboard | Analyticraft — Canvas + ECharts |
+| DAX | ⚠️ Falta: medidas simples en Analyticraft |
+| Power BI Service / Nube | No lo necesitas, eres local-first |
+
+**No son 2 apps. Son:**
+- **ModernRefine** = 1 app: **preparar**
+- **Analyticraft** = 1 app: **modelar + visualizar**
+
+Power BI junta las dos en una sola ventana. Tú las separaste en dos apps. **Y esa separación es una ventaja, no un defecto.**
+
+---
+
+## Por qué tu separación es mejor para tu usuario
+
+En Power BI, el usuario principiante se pierde porque tiene todo mezclado:
+- Está limpiando y de repente le aparece el modelo.
+- Está haciendo un gráfico y le pide una medida DAX.
+- No sabe si el error es de limpieza, de relación o de fórmula.
+
+En tu flujo, el usuario hace **una cosa a la vez**:
+1. **ModernRefine:** *"¿Está limpio?"* → Sí → exporto.
+2. **Analyticraft:** *"¿Está bien relacionado?"* → Sí → visualizo.
+
+Es más claro, más reversible y más fácil de enseñar. Para la pyme que hace 90% en Excel, eso vale más que tener 100 funciones.
+
+---
+
+## Sobre "clonar" la GUI
+
+Aquí es importante separar dos cosas:
+
+**Lo que SÍ puedes clonar sin problema:**
+- El **concepto**: 3 paneles (Campos / Visualizaciones / Lienzo).
+- El **flujo**: Obtener → Limpiar → Modelar → Visualizar.
+- Los **patrones de UX**: arrastrar campo, segmentador, tabla de hechos a la izquierda, etc.
+- Los **nombres genéricos**: "Modelo", "Relación 1:N", "Medida".
+
+Eso no es código propietario, son patrones de la industria. Todos los BI los usan: Tableau, Looker, Qlik, etc.
+
+**Lo que NO debes clonar:**
+- Copiar iconos, logos, imágenes, textos exactos de Microsoft.
+- Copiar código de Power BI o decompilarlo.
+- Usar la marca "Power BI" como si fuera tuya.
+- Copiar el lenguaje M o DAX tal cual, con su sintaxis propietaria exacta.
+
+Tú ya lo estás haciendo bien: usas **Tauri + Rust + React**, con tu propio código, tu propio diseño minimalista y tu propio formato `.refine.json`. Eso es **reimplementar la idea**, no imitar el código.
+
+La frase correcta para tu proyecto no es *"clon de Power BI"*. Es:
+
+> **"Una reimplementación local-first, open-source, del flujo Obtener → Limpiar → Modelar → Visualizar, con herramientas de 2026."**
+
+Y eso es legal, es académico y es defendible.
+
+---
+
+## Lo que te falta para decir "ya tengo el equivalente"
+
+Si tu meta es esa, te faltan **3 piezas**, en este orden:
+
+1. **En ModernRefine:** que exporte `model.json` con roles Fact / Catálogo + relaciones. *(Ya lo hablamos.)*
+2. **En Analyticraft:** un mini-motor de medidas. No DAX completo. Solo:
+   - Suma, Conteo, Promedio, Máx, Mín
+   - % del total
+   - Acumulado
+   - Conteo distinto
+   
+   Con eso cubres el 90% de lo que la pyme usa de DAX.
+3. **En Analyticraft:** que al abrir un proyecto de ModernRefine, ya venga el modelo dibujado, sin que el usuario tenga que crear las relaciones a mano.
+
+Con esas 3, ya puedes decir:
+
+> *"Tengo el flujo completo de Power BI Desktop, pero separado en 2 apps, local-first y sin nube."*
+
+---
+
+**¿Quieres que te haga el mapa de qué pantalla de Power BI corresponde a qué pantalla de ModernRefine / Analyticraft, para que lo uses como guía de GUI sin copiar nada de Microsoft?**

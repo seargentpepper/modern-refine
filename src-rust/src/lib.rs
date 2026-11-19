@@ -5,6 +5,9 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use unicode_normalization::char::is_combining_mark;
 use unicode_normalization::UnicodeNormalization;
 
+pub mod duckdb_engine;
+pub mod sources;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ClusterMethod {
     Fingerprint,
@@ -345,6 +348,95 @@ pub fn split_latin_american_name(raw: &str) -> SplitNameResult {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ColumnProfileResult {
+    pub column: String,
+    pub total_rows: usize,
+    pub empty_count: usize,
+    pub error_count: usize,
+    pub control_char_count: usize,
+    pub unique_non_empty: usize,
+    pub duplicate_rows: usize,
+}
+
+/// Limpia caracteres de control invisibles, NBSP y colapsa espacios múltiples
+pub fn deep_clean_text(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut prev_space = true;
+    for ch in input.chars() {
+        if matches!(ch, '\u{0000}'..='\u{0008}' | '\u{000B}' | '\u{000C}' | '\u{000E}'..='\u{001F}' | '\u{007F}' | '\u{200B}'..='\u{200D}' | '\u{FEFF}') {
+            continue;
+        }
+        if ch.is_whitespace() || ch == '\u{00A0}' {
+            if !prev_space {
+                out.push(' ');
+                prev_space = true;
+            }
+        } else {
+            out.push(ch);
+            prev_space = false;
+        }
+    }
+    if out.ends_with(' ') {
+        out.pop();
+    }
+    out
+}
+
+pub fn is_error_cell(val: &str) -> bool {
+    let t = val.trim();
+    matches!(
+        t.to_ascii_uppercase().as_str(),
+        "#ERROR!" | "#N/A" | "#VALUE!" | "#REF!" | "#DIV/0!" | "#NAME?" | "#NUM!" | "#NULL!"
+    )
+}
+
+/// Perfilado rápido en paralelo de calidad y duplicados para una columna
+pub fn profile_column_values(column: &str, values: &[String]) -> ColumnProfileResult {
+    let total_rows = values.len();
+    let (empty_count, error_count, control_char_count) = values
+        .par_iter()
+        .fold(
+            || (0usize, 0usize, 0usize),
+            |mut acc, v| {
+                if v.trim().is_empty() {
+                    acc.0 += 1;
+                } else {
+                    if is_error_cell(v) {
+                        acc.1 += 1;
+                    }
+                    if v.chars().any(|c| c.is_control() || matches!(c, '\u{00A0}' | '\u{200B}'..='\u{200D}' | '\u{FEFF}')) {
+                        acc.2 += 1;
+                    }
+                }
+                acc
+            },
+        )
+        .reduce(
+            || (0, 0, 0),
+            |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2),
+        );
+
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for v in values {
+        if !v.trim().is_empty() {
+            *counts.entry(v.as_str()).or_insert(0) += 1;
+        }
+    }
+    let unique_non_empty = counts.len();
+    let duplicate_rows: usize = counts.values().filter(|&&c| c > 1).map(|&c| c - 1).sum();
+
+    ColumnProfileResult {
+        column: column.to_string(),
+        total_rows,
+        empty_count,
+        error_count,
+        control_char_count,
+        unique_non_empty,
+        duplicate_rows,
+    }
+}
+
 /// Paginación virtualizada para ventanas de alta densidad (500k+ filas)
 pub fn paginate_rows(
     rows: &[HashMap<String, String>],
@@ -461,5 +553,24 @@ mod tests {
         assert_eq!(n3.nombres, "Patricia");
         assert_eq!(n3.apellido_paterno, "de la Cruz");
         assert_eq!(n3.apellido_materno, "Ríos");
+    }
+
+    #[test]
+    fn test_profile_column_and_deep_clean() {
+        assert_eq!(deep_clean_text("  Hola\u{00A0}\t mundo\u{200B}\n  "), "Hola mundo");
+        let vals = vec![
+            "CDMX".to_string(),
+            "CDMX".to_string(),
+            "".to_string(),
+            "#ERROR!".to_string(),
+            "Tabasco\u{00A0}".to_string(),
+        ];
+        let prof = profile_column_values("Ciudad", &vals);
+        assert_eq!(prof.total_rows, 5);
+        assert_eq!(prof.empty_count, 1);
+        assert_eq!(prof.error_count, 1);
+        assert_eq!(prof.control_char_count, 1);
+        assert_eq!(prof.unique_non_empty, 3);
+        assert_eq!(prof.duplicate_rows, 1);
     }
 }

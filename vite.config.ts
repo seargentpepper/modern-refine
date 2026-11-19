@@ -6,5 +6,8 @@ export default defineConfig({
   server: {
     port: 5174,
     strictPort: true,
+    watch: {
+      ignored: ["**/src-tauri/target/**", "**/src-rust/target/**", "**/dist/**"],
+    },
   },
 });

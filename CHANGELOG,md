@@ -1,0 +1,190 @@
+# Historial de Cambios — ModernRefine
+
+## [0.5.1] — Pulido de UI Fluent 2, Tabla en Blanco, Get Data y Estabilidad Dev/Build
+
+> **En pocas palabras:** Refinamiento visual y ergonómico sobre la versión blanca `0.5.x`: creación de tablas editables en blanco desde cero, rediseño alineado del catálogo *Obtener datos* con todos sus conectores activos, eliminación de botones redundantes de *Deshacer/Rehacer*, limpieza de la pantalla de inicio y estabilidad del servidor Vite en Windows frente a `target/`.
+
+### Cambios Implementados (`0.5.1`)
+1. **Depuración de Controles Redundantes (`src/App.tsx`):**
+   - Eliminados los botones duplicados de **Deshacer** y **Rehacer** de la barra de acceso rápido superior (QAT) y del grupo *Historial* en el Ribbon `Inicio`.
+   - Consolidados **Deshacer** y **Rehacer** exclusivamente en el **Panel Derecho (`Datos y Pasos`)**, manteniendo los atajos globales `Ctrl+Z`, `Ctrl+Y` y `Ctrl+Shift+Z`.
+2. **Nueva Tabla en Blanco y Pantalla de Inicio Limpia (`src/App.tsx`, `src/components/ActionModals.tsx`):**
+   - Añadido el flujo **`Nueva tabla`** (`new_table`) accesible desde la pantalla de bienvenida, el Backstage (`Archivo -> Nuevo`) y el botón `+` de pestañas, permitiendo crear tablas editables desde cero definiendo nombre, columnas y número inicial de filas.
+   - Retirada la carga directa de plantillas desalineada del cuadro de inicio principal (conservando el selector rápido de plantillas en el Ribbon y en `Archivo -> Abrir`).
+3. **Estética y Conectividad Completa de "Obtener datos" (`src/components/GetDataWizard.tsx`, `src/App.css`):**
+   - Alineado el diálogo de catálogo de 2 columnas (*Categorías | Conectores*) al estilo Fluent 2 / Power BI del resto de la aplicación y activados todos los botones de origen (archivos Excel/CSV/JSON locales, Web API, Wikipedia y SQL).
+4. **Estabilidad de Vite / Tauri en Windows y Limpieza del Repositorio (`vite.config.ts`, `src-tauri/build.rs`):**
+   - Excluidos `**/src-tauri/target/**`, `**/src-rust/target/**` y `**/dist/**` del *file watcher* de Vite (`server.watch.ignored`) para evitar bloqueos `EBUSY` al compilar Rust en paralelo con `npm run dev`.
+   - Confirmado el compilado nativo de **DuckDB (`duckdb.dll`)** sin WASM y eliminada la carpeta temporal interna `dashcraft/` duplicada en la raíz del repositorio padre.
+
+---
+
+## [0.5.0] — Integración de Motor DuckDB Nativo (Sin WASM)
+
+> **En pocas palabras:** ModernRefine incorpora **DuckDB nativo real en Rust** (`duckdb = "1.20000.2"`, cero WebAssembly / cero `@duckdb/duckdb-wasm`), desbloqueando consultas SQL directas, *Group By* de alto rendimiento, exportación columnar a **Apache Parquet (`.parquet`)** y las primeras **fórmulas mágicas de ventana y anomalías** directamente sobre el motor C++ nativo dentro de Tauri v2.
+
+### Cambios Técnicos Implementados (`0.5.0`)
+1. **Módulo Nativo DuckDB en Rust (`src-rust/Cargo.toml`, `src-rust/src/duckdb_engine.rs`, `src-rust/src/lib.rs`):**
+   - Añadido `duckdb = "1.20000.2"` (sin WASM) y creado `DuckDbEngine` sobre `Connection::open_in_memory()`.
+   - Carga ultrarrápida mediante `duckdb::Appender` (`load_snapshot`) preservando `__orig_idx` para determinismo de filas.
+   - Consultas de lectura validadas (`query_read_only` vía `validate_sql_read_only`), agregaciones rápidas (`group_by_summary`: `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`), exportación nativa a Parquet (`export_parquet`) y evaluador nativo de ventana/anomalías (`evaluate_window_magic`: `RUNNING_SUM`, `PCT_OF_TOTAL`, `GROUP_AVG`, `ROW_NUM`, `IS_OUTLIER`).
+   - Verificado con 2 nuevas pruebas unitarias en `duckdb_engine::tests` (`cargo test`: 8/8 pasando).
+2. **Estado Nativo Tauri y Distribución Windows (`src-tauri/src/lib.rs`, `src-tauri/build.rs`):**
+   - Gestionado `DuckDbState(Mutex<Option<DuckDbEngine>>)` y expuestos los 6 comandos Tauri: `duckdb_engine_status`, `duckdb_sync_session`, `duckdb_query_preview`, `duckdb_group_summary`, `duckdb_export_parquet` y `duckdb_evaluate_window_magic`.
+   - Configurado `src-tauri/build.rs` para copiar automáticamente `duckdb.dll` junto al ejecutable en Windows (`target/debug` / `target/release`).
+3. **Interfaz, Puente y Exportación Parquet (`src/lib/tauriBridge.ts`, `src/components/DuckDbModal.tsx`, `src/App.tsx`, `src/types/refine.ts`, `src/lib/refineEngine.ts`):**
+   - Nuevo botón **`DuckDB Nativo`** en el Ribbon (`Inicio -> Orígenes y Ecosistema`) que abre la consola con pestañas **Consulta SQL**, **Agrupar por (Group By)** (con botón *Abrir resultado en nueva pestaña*) y **Fórmulas Mágicas (Ventana)** (con paso reversible `computed_column`).
+   - Añadida exportación **`Exportar en Parquet (.parquet)`** en Ribbon `Exportar ▾`, Backstage `Archivo -> Exportar` y en el pie del modal DuckDB.
+   - Sin fallback falso a WASM: el motor `fx` actual de 47 funciones permanece 100% intacto y compatible.
+
+---
+
+## [0.4.1] — Módulo "Obtener Datos / Get Data" (UI Familiar Power BI + Conectores Snapshot)
+
+> **En pocas palabras:** Activado el flujo completo de **Obtener datos** en Ribbon (`Inicio ➔ Obtener datos ▾`) y Backstage (`Archivo ➔ Obtener datos`), siguiendo el estándar visual de Power BI Desktop con ingesta en modo *Snapshot* inmutable, soporte en vivo para APIs Web (JSON/CSV) y tablas HTML de Wikipedia, y configuración + credenciales por nivel para bases SQL sin exponer contraseñas en `.refine.json`.
+
+### Cambios Técnicos Implementados (`0.4.1`)
+1. **Arquitectura de Conectores en Rust (`src-rust/src/sources.rs`, `src-tauri/Cargo.toml`, `src-tauri/src/lib.rs`):**
+   - Definido el *trait* `DataSource` y estructuras `SourceConnectionParams`, `SourcePreview`, `SourceSnapshot` y `TableSchema`.
+   - Implementados parsers puros para **JSON tabular** (`parse_json_tabular`, arrays y envolturas `data`/`results`/`items`/`rows`/`value`), **CSV remoto** (`parse_csv_snapshot`), **tablas HTML de Wikipedia** (`parse_html_tables`) y validación de seguridad SQL de solo lectura (`validate_sql_read_only` + `build_sql_preview_query`).
+   - Añadido `reqwest 0.13` (`rustls` + `json`) en `src-tauri` y expuestos los comandos Tauri `preview_external_source` y `fetch_external_snapshot`.
+2. **Puente Híbrido Web + Escritorio (`src/lib/sourceParsers.ts`, `src/lib/tauriBridge.ts`, `src/types/refine.ts`):**
+   - `previewExternalSourceBridge` y `fetchExternalSnapshotBridge`: invocan comandos nativos en Tauri Desktop (cero restricciones CORS) y ofrecen ejecución directa en navegador para **Web JSON/CSV** y **Wikipedia MediaWiki API** (`origin=*`).
+   - `sanitizeSourceDescriptor`: garantiza que contraseñas, usuarios y tokens Bearer **nunca** se serialicen en `source` dentro de `.refine.json`.
+   - Caché de credenciales en memoria por nivel (`servidor` vs `servidor;BaseDeDatos`) vía `saveScopedCredentialMemory` / `loadScopedCredentialMemory`.
+3. **Wizard UI Familiar Power BI (`src/components/GetDataWizard.tsx`, `src/App.tsx`, `src/App.css`):**
+   - Menú rápido **"Orígenes de datos comunes"** desde `Obtener datos ▾` y acceso en estado inicial.
+   - Catálogo de 2 paneles (*Buscar + Categorías | Conectores*), configuración de servidor/base con `Importar (Snapshot)` vs `DirectQuery (En Analyticraft)` y acordeón `▸ Opciones avanzadas` (`Instrucción SQL` y *timeout*), pantalla de credenciales con barra lateral oscura (`Windows` / `Base de datos` / `Anónimo` / `Token`) + selector de nivel, y **Navegador de tablas con vista previa de 100 filas**.
+
+---
+
+## [0.4.0] — Situación Total: Rediseño Fluent 2, Motor `fx` + LLM y Puesta en Marcha de `nuevas features`
+
+> **En pocas palabras:** ModernRefine consolida el salto desde el prototipo oscuro de `0.3.0` hacia una **estación Pre-BI autosuficiente** con interfaz **Office / Fluent 2 Light (DashCraft)**, **motor de fórmulas seguras `fx` (47 funciones + puente LLM)** y la implementación completa de las utilidades de primera vista y facetas bidireccionales planificadas en `nuevas features` (calidad de columna, tipos, duplicados, histogramas/timelines, deduplicación reversible, buscar/reemplazar, división/fusión flexible, manejo de errores, promoción de encabezados y *Unpivot*).
+
+### Comparativa Técnica: El "Antes" (`0.3.0` / diagnóstico inicial) vs. Situación Total Actual (`0.4.0`)
+
+| Capacidad / Área | Antes (`0.3.0`, citado en `nuevas features`) | Situación Total Actual (`0.4.0`) |
+|---|---|---|
+| **Sistema de Diseño e Interfaz** | Shell oscuro de 3 zonas fijas con barra superior simple. | **Office / Fluent 2 Light (`src/styles/tokens.css`, `src/App.css`):** TitleBar + Quick Access Toolbar, buscador global (`Ctrl+K`), Ribbon (`Archivo` Backstage, `Inicio`, `Vista`, `Ayuda`), paneles laterales colapsables (`Ctrl+Alt+L/P`) e Inspector rápido de columna (`mr-col-inspector-card`). |
+| **Fórmulas e Integración LLM** | No existía barra de fórmulas ni puente con LLMs. | **Motor `fx` completo (`src/lib/formula/`):** Tokenizer, parser AST, validador estricto y **47 funciones** en 5 categorías (Texto, Lógica/Nulos, Números, Fechas, México: CURP/RFC/CP/Teléfono), vista previa de 5 filas, botones guardados (`Fórmulas rápidas fx`) y **Puente LLM** (`buildLlmPromptForTable` + `parseFormulaOrLlmJson`). |
+| **Facetas (Exploración → Acción)** | Solo lista de valores únicos + 5 algoritmos de clustering textual. | **4 Lentes de Faceta (`src/components/SmartFacetsPanel.tsx`):** Barra interactiva de **Calidad** (Válidos / Vacíos / Errores-Inconsistencias con acciones en 1 clic), **Valores**, **Duplicados** (`>1` vs `=1`), **Tipos** (desglose por celda + conversión) y **Rango** (histograma numérico de 8 bins y *timeline* de fechas por mes). |
+| **Duplicados** | No existía detección ni eliminación. | **Deduplicación reversible (`remove_duplicates`):** Por columna clave o fila 100% idéntica, conservando 1ª o última aparición; filas descartadas recuperables en `Papelera`. |
+| **Buscar y Reemplazar** | Solo transformaciones fijas o renombrado de faceta exacta. | **Modal `Reemplazar` (`replace_value`):** Coincidencia exacta, parcial o Regex, sensible/insensible a mayúsculas, contador de celdas afectadas y vista previa de 5 muestras antes de aplicar. |
+| **División y Combinación** | Limitado a dividir por `"-"` en 2 columnas. | **`split_column_flexible` + `merge_columns` + `extract_text`:** División por delimitador libre en N partes o por longitud fija; fusión de 2+ columnas con separador personalizado y ocultación opcional de fuentes; extracción antes/después/entre delimitadores o primeros/últimos N caracteres sin fórmulas. |
+| **Limpieza Profunda y Relleno** | `trim` básico y solo `fill_down`. | **`clean_deep` + `fill_up`:** Eliminación de caracteres de control ASCII/Unicode invisibles (`\u0000-\u001F`, `\u200B-\u200D`, `\uFEFF`, `\u00A0`), saltos/tabs y espacios múltiples; relleno hacia arriba (`fill_up`). |
+| **Tipado, Errores y Estructura BI** | Solo homologación de fechas; sin tipado general ni *reshape*. | **`cast_column_type` + `replace_errors` / `remove_error_rows` + `promote_headers` + `unpivot_columns`:** Conversión explícita a Texto/Entero/Decimal/Fecha/Booleano marcando fallos con `#ERROR!` (resaltado en rojo `.mr-error-cell`), limpieza o borrado de filas con error, promoción de 1ª fila como encabezado y **Unpivot** (columnas → filas `Atributo / Valor`). |
+
+---
+
+### Cambios Técnicos Implementados en Esta Entrega (`0.4.0`)
+
+#### 1. Motor Determinista de Recetas y Perfilado (`src/types/refine.ts`, `src/lib/refineEngine.ts`)
+- **Nuevos `TransformKind` en el esquema `modern-refine/v1` (retrocompatibles):**
+  `clean_deep`, `split_column_flexible`, `merge_columns`, `extract_text`, `cast_column_type`, `replace_value`, `replace_errors`, `remove_error_rows`, `remove_duplicates`, `promote_headers`, `unpivot_columns`, `fill_up`.
+- **Estado de filtros de faceta en `TableSession`:** Añadidos `qualityFilter`, `typeFilter`, `duplicateFilter`, `numericRangeFilter` y `timelinePeriodFilter` (con limpieza unificada vía `EMPTY_FACET_FILTERS` al cambiar columna o aplicar pasos).
+- **Funciones analíticas puras:**
+  - `computeColumnQualityProfile` y `classifyCellQuality`: evalúan cada celda según tipo inferido (`inferCellType`), errores (`isErrorCellValue`), caracteres de control (`hasControlOrInvisibleChars`), fechas desbordadas y CPs cortos.
+  - `computeDuplicateSummary`, `buildColumnFrequencyMap` y `serializeRowSignature`: calculan grupos repetidos en columna y duplicados exactos por fila completa.
+  - `computeNumericRangeProfile` (8 *bins*) y `computeDateTimeline` (agrupación `YYYY-MM` + categoría `Inválida / Sin fecha`).
+- **Reproducción determinista en `replayRecipeWithTrash`:** Todas las operaciones destructivas de filas (`remove_duplicates`, `remove_error_rows`, `promote_headers`) envían los registros descartados a `trash` preservando `origIdx`; en `unpivot_columns` se generan `origIdx` deterministas por fila origen y columna desplegada.
+
+#### 2. Facetas Inteligentes y Modales Pre-LLM (`src/components/SmartFacetsPanel.tsx`, `src/components/ActionModals.tsx`, `src/App.tsx`, `src/App.css`)
+- **Ribbon `Inicio` ampliado (autosuficiencia visual antes del botón LLM):**
+  - Grupo **`Limpieza y Datos`**: `Reemplazar`, `Duplicados`, `Tipo ▾` (Texto, Entero, Decimal, Fecha ISO, Booleano) y `Errores ▾` (reemplazar por vacío/`"0"` o quitar filas).
+  - Grupo **`Columnas y Forma`**: `Dividir`, `Combinar`, `Extraer`, `Unpivot` y `1ª Fila Encab.`.
+- **Panel Izquierdo (`ColumnQualityBar` + `SmartFacetsPanel`):**
+  - Barra segmentada de calidad interactiva siempre visible para la columna activa, con botones contextuales inmediatos al aislar *Vacíos* o *Errores/Inconsistencias*.
+  - Selector de 4 modos en la pestaña `Facetas`: `Valores`, `Duplicados`, `Tipos` y `Rango`.
+  - Nuevas acciones rápidas en panel: `Trim + Clean`, `Rellenar arriba`, y accesos en `Estructura y División de Columna`.
+- **Modales con vista previa en vivo (`ActionModals.tsx`):** Vista previa de filas afectadas antes de escribir en la receta para *Buscar y Reemplazar*, *Dividir Flexible*, *Extraer Texto*, *Combinar Columnas*, *Quitar Duplicados* y *Unpivot*.
+- **Grid e Inspector (`src/App.tsx`):** Resaltado `.mr-error-cell` para celdas `#ERROR!` / `#N/A` / `#VALUE!` / `#DIV/0!`, y métricas de calidad válida, errores y duplicados dentro del Inspector rápido de columna.
+
+#### 3. Motor Nativo Rust y Puente Tauri (`src-rust/src/lib.rs`, `src-tauri/src/lib.rs`, `src/lib/tauriBridge.ts`)
+- Añadidas en `modern_refine_engine` (`src-rust/src/lib.rs`): `ColumnProfileResult`, `profile_column_values` (conteo paralelo con `rayon` de vacíos, errores Excel/internos, caracteres invisibles y duplicados), `deep_clean_text` e `is_error_cell`.
+- Expuesto el comando Tauri `refine_profile_column` en `src-tauri/src/lib.rs` y puente `profileColumnBridge` en `src/lib/tauriBridge.ts`.
+- Verificado con `cargo test` (3/3 pruebas unitarias pasando), `cargo check` en `src-tauri`, `npm run build` (`tsc && vite build`) y suite de aserciones sobre `refineEngine.ts` y `clientes_sucursales_sucios.csv`.
+
+#### 4. Brechas Pendientes para Futuras Fases (Fuera de este Alcance)
+- **Reshaping avanzado multi-tabla:** `Group By / Agrupar por`, `Pivot` (filas a columnas) y `Merge / Append` (unión de múltiples archivos/sesiones).
+- **Productividad avanzada:** Parámetros dinámicos en `.refine.json` y botón mágico *"Columna desde ejemplos"* conectado al flujo LLM.
+
+---
+
+## [0.3.0] — Fase 3 (Semana 3 y 4: Multi-Sesión, Acordeones, Nombres LatAm y Virtualización)
+
+> **En pocas palabras:** ModernRefine evoluciona a una estación multi-archivo con pestañas independientes (`TableSession[]`), historial agrupado en acordeones con checkbox maestro, separador inteligente de nombres latinoamericanos en 3 columnas, ocultación no destructiva de columnas, paginación virtualizada para tablas masivas y puente híbrido hacia Rust (`tauriBridge.ts`).
+
+### Multi-Sesión y Ergonomía de Interfaz (`src/App.tsx`, `src/App.css`)
+- **Sesiones independientes por pestaña (`TableSession[]`):** Apertura simultánea de múltiples archivos (`.csv`, `.tsv`, `.xlsx`, `.xls`, `.ods`, `.json`) y plantillas, conservando cada pestaña su propio historial, pila `Deshacer / Rehacer`, papelera, ordenamiento y columna activa.
+- **Barra superior en una sola línea e iconografía oficial:** Integrado el logo oficial `mR_harmonia_cutout.png`, añadido el botón `Cerrar` (`Alt+W`), menús desplegables unificados para **`Recetas ▾`** y **`Exportar ▾`**, y atajos de teclado mostrados limpiamente en los tooltips (`title`).
+- **Ordenamiento por tipo en cabeceras (`<th>`):** Botón `↕ / ↑ / ↓` que ordena numéricamente, cronológicamente o alfabéticamente dejando vacíos al final.
+- **Reubicación de `Deshacer` y `Rehacer`:** Colocados directamente en el panel derecho entre la cabecera `HISTORIAL Y PAPELERA` y las pestañas `Pasos | Papelera | Receta`.
+- **Historial en acordeones por columna/tarea:** Agrupación automática con **checkbox maestro** para activar/desactivar tareas completas en tiempo real y borrado grupal o individual.
+
+### Estructura de Columnas y Separador de Nombres Latinoamericanos (`src/lib/refineEngine.ts`, `src-rust/src/lib.rs`)
+- **Menú de ancho completo `Estructura y División de Columna`:**
+  - `Duplicar columna` (`Alt+D`), `Renombrar columna...` (`Alt+R`), `Borrar (desaparecer) columna` (`Alt+X`, no destructivo y recuperable desde `Papelera`), `Dividir en 2 columnas (por "-")` (`Alt+2`), `Conservar izquierda` (`Alt+I`), `Conservar derecha` (`Alt+U`) y `Separar en Nombre(s) + 2 Apellidos` (`Alt+N`).
+- **Separador de nombres en 3 columnas (`Nombre(s)`, `Apellido_Paterno`, `Apellido_Materno`):** Agrupa partículas compuestas (`de`, `del`, `de la`, `vda.`) y distingue nombres dobles (`Juan Carlos Méndez`, `María Fernanda Ruiz`) de nombres simples con dos apellidos (`Ana López Pérez`) usando búsqueda $O(1)$ en tablas hash.
+
+### Virtualización y Contenedor de Escritorio Nativo Tauri v2 (`src-tauri/`, `src/lib/tauriBridge.ts`, `src-rust/src/lib.rs`, `src/App.css`)
+- **Ejecución como ventana nativa independiente (Windows, macOS y Linux):** Configurado `modern-refine/src-tauri` con Tauri v2 (`@tauri-apps/cli`, `@tauri-apps/api`, `@tauri-apps/plugin-opener`, `@tauri-apps/plugin-dialog`). Corre tanto en ventana nativa dedicada (`npm run dev:desktop` / `npm run tauri dev`) como en navegador (`npm run dev`).
+- **Diálogo nativo "Guardar como..." multiplataforma:** Integrado `tauri-plugin-dialog` y el comando Rust `write_export_file` para que **Exportar XLSX**, **Exportar CSV** y **Guardar Receta** abran el explorador nativo del sistema operativo en Desktop (con fallback a descarga web en navegador).
+- **Barras de desplazamiento azul oscuro consistentes:** Estilizado global en `src/App.css` (`color-scheme: dark`, `scrollbar-color` estándar y `::-webkit-scrollbar*`) para eliminar barras claras del sistema operativo en todos los paneles.
+- **Paginación virtualizada (`PAGE_SIZE = 100`):** Monta como máximo 100 filas en el DOM por bloque con sincronización automática al navegar con flechas, manteniendo el diseño idéntico en tablas pequeñas y evitando bloqueos en archivos de 500k+ filas.
+- **Paridad e invocación directa en crate Rust (`modern_refine_engine`):** Conectados los comandos de Tauri `refine_cluster` y `refine_split_latin_name` al motor Rust nativo a través de `src/lib/tauriBridge.ts`.
+
+---
+
+## [0.2.0] — Fase 2 (Semana 2 y 3: Motor 5-Niveles, Excel Nativo y Rust)
+
+> **En pocas palabras:** ModernRefine da el salto a los 5 algoritmos de clustering (incluyendo Fonético en Español y N-gram), suma limpieza de teléfonos/monedas/códigos postales/separación de columnas, abre y exporta libros Excel (`.xlsx`/`.ods`) con selector de hojas, e incorpora el crate nativo en Rust (`modern_refine_engine`).
+
+### Clustering de 5 Niveles y Transformaciones Avanzadas (`src/lib/refineEngine.ts`, `src/App.tsx`)
+- **5 algoritmos activos en cascada:** *Fingerprint*, *N-gram Fingerprint* (bigramas), *Fonético ES* (`spanishPhoneticKey`), *Levenshtein* y *Abreviatura*, con filtro rápido por método dentro de la pestaña `Clústeres`.
+- **Nuevas transformaciones en 1 clic:**
+  - `Solo números` (`extract_numbers`): limpia símbolos de moneda (`"$15,750.00"` → `"15750.00"`) y teléfonos (`"Tel: (993) 312-4455"` → `"9933124455"`).
+  - `CP 5 dígitos (0...)` (`pad_postal_code`): restaura ceros iniciales comidos por Excel (`8600` → `08600`) con chip diagnóstico `X CP sin cero inicial`.
+  - `Separar izq (-)` (`split_keep_left`): extrae la categoría principal en columnas compuestas como `Segmento_Zona`.
+- **Ingesta inteligente:** Auto-detección de separador (`,`, `;`, `\t`, `|`) y deduplicación automática de encabezados repetidos.
+
+### Soporte Excel Multi-Hoja y Datos de Prueba (`clientes_sucursales_sucios.csv`)
+- **Importación y exportación Excel:** Lectura directa de `.xlsx`, `.xls` y `.ods` con selector de hoja en la barra superior y botón **`Exportar XLSX`** junto a `Exportar CSV`.
+- **Plantilla ampliada sin romper recetas previas:** `clientes_sucursales_sucios.csv` crece a **34 filas y 9 columnas** (`Codigo_Postal`, `Telefono`, `Segmento_Zona`, variantes fonéticas `Biya Hermosa` / `Jalapa` / `Kankun`, abreviaturas `Gdl` / `Mty` / `Q. Roo`, seriales de Excel `45762` / `45790` y fechas en texto), manteniendo intactas las primeras 18 filas (`C-001` a `C-018`) para compatibilidad total con recetas `.refine.json` guardadas en Fase 1.
+
+### Crate Nativo en Rust (`src-rust/`)
+- Creado `modern_refine_engine` (`calamine 0.38`, `rayon`, `strsim`, `unicode-normalization`, `csv`, `serde`) con clustering paralelo sobre valores únicos y lectura nativa de hojas Excel, verificado con `cargo test` (1/1 test pasando).
+
+---
+
+## [0.1.0-proto] — Cierre de Fase 1 (Semana 1: Prototipo UI)
+
+> **En pocas palabras:** Validada la ergonomía completa de las 3 zonas (*Facetas y Clústeres*, *Tabla Editable* e *Historial / Papelera / Receta JSON*) sobre datos reales sucios, dejando lista la base funcional para conectar el motor Rust + DuckDB en Fase 2.
+
+### Motor Determinista de Recetas y Papelera (`src/lib/refineEngine.ts`)
+- **Identidad estable por fila (`origIdx`):** Cada fila original recibe un índice inmutable `origIdx` al cargarse. Todas las mutaciones (`edit_cell`, `delete_row`, `delete_empty_rows`, `restore_rows`) operan sobre `origIdx`, evitando desplazamientos o corrupción de índices al activar, desactivar o eliminar pasos intermedios.
+- **Reproducción pura (`replayRecipeWithTrash`):** Recalcula desde `baseRows` el estado activo (`activeRows`) y las filas descartadas (`trash`) en cada cambio:
+  - **Activar / Desactivar pasos (`enabled`):** Los pasos desmarcados se omiten en la cadena sin perderse, permitiendo previsualizar su impacto en tiempo real.
+  - **Eliminar paso aislado:** Remover un paso intermedio recalcula limpiamente el resto de la cadena.
+  - **Papelera y restauración (`restore_rows`):** Las filas eliminadas manualmente o por campos críticos vacíos pasan a `Papelera` con su motivo y vista previa, pudiendo restaurarse individualmente o en bloque a su posición original (`sort` por `origIdx`).
+- **Importación y exportación de recetas (`.refine.json`):** `Guardar Receta` exporta el esquema `modern-refine/v1` y `Cargar Receta` rehidrata pasos previos sobre la tabla activa.
+
+### Homologación Masiva de Fechas (`parseCalendarDate`, `standardizeDateValue`)
+- **Detección automática y controles exclusivos (`isDateCol`):** Solo cuando la columna seleccionada es de fecha se habilitan tanto la barra superior de reformateo (`Reformatear toda la columna`) como el bloque `Homologar fechas` del panel izquierdo.
+- **7 patrones de salida:** `iso` (`AAAA-MM-DD`, estándar DuckDB / Analyticraft), `dmy_slash` (`DD/MM/AAAA`), `ymd_slash` (`AAAA/MM/DD`), `dmy_dash` (`DD-MM-AAAA`), `mdy_slash` (`MM/DD/AAAA`), `spanish_short` (`14-ene-2025`) y `spanish_long` (`14 de enero de 2025`).
+- **Normalización de fechas desbordadas (`normalizeAndClampYMD`):** Corrige inversiones `MM/DD` y ajusta días/meses imposibles al límite real del calendario (ej. `30/02/2025` → `28`, `15/13/2025` → mes `12`), garantizando la homologación del 100% de la columna.
+
+### Ergonomía de Interfaz (`src/App.tsx`, `src/App.css`)
+- **Inicio limpio y selector desbloqueado (`src/data/csvTemplates.ts`):** Arranca sin datos de muestra; descubre automáticamente cualquier `.csv` en `modern-refine/*.csv` y permite volver al inicio limpio desde el selector (`— Cerrar tabla (Inicio limpio) —`).
+- **Selección de columna completa:** Hacer clic en la cabecera de una columna resalta todas sus celdas y enfoca sus transformaciones globales.
+- **Selección directa en clústeres:** Cada variante agrupada incluye el botón `Elegir` para fusionar todo el grupo hacia ese valor con un clic, sin escribir texto manualmente.
+- **Controles de texto y facetas:** Botones directos (`MAYÚSCULAS`, `minúsculas`, `Tipo Título`, `Quitar espacios`, `Sin acentos`, `Vacíos → Sin dato`, `Rellenar abajo`, `Eliminar filas vacías`) y renombrado inline de etiquetas de faceta y alias de filtro activo.
+- **Navegación por teclado:** Flechas direccionales (`↑ ↓ ← →`) + `Enter`/`F2` para editar celdas, con resaltado visual de fila y celda activa.
+
+---
+
+### Aprendizajes Clave de Fase 1 (Para Fase 2: Rust + DuckDB)
+1. **No correr Levenshtein sobre fechas ni códigos numéricos:** El algoritmo de distancia de edición agrupaba fechas distintas (`2025-01-14`, `2025-02-03`...) como si fueran errores tipográficos. En Rust se debe mantener la exclusión de columnas de fecha y cadenas con dígitos antes de ejecutar clustering textual.
+2. **Controles contextuales por tipo de columna:** Mostrar herramientas de fechas sobre columnas de texto o IDs genera ruido visual; la UI debe adaptar sus barras de acción según el tipo inferido de la columna activa.
+3. **Índice inmutable `origIdx` desde la ingesta:** Es indispensable para que el historial no lineal (desactivar pasos o restaurar filas de la papelera) funcione sin corromper ediciones posteriores.
+4. **Reparación vs. rechazo estricto en fechas sucias:** En Excel reales aparecen fechas desbordadas (`30/02`, mes `13`); el motor debe ofrecer normalización/ajuste explícito para no dejar filas sueltas sin formato.

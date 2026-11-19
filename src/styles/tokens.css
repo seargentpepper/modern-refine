@@ -1,0 +1,59 @@
+:root {
+  color-scheme: light;
+
+  /* Chrome y superficies (DashCraft / Office Fluent 2 Light) */
+  --mr-chrome: #f5f5f5;          /* TitleBar, RibbonTabs, ViewRail, StatusBar */
+  --mr-chrome-hover: #ebebeb;
+  --mr-surface: #ffffff;         /* Cuerpo del Ribbon, Grid, Panes, Diálogos */
+  --mr-surface-subtle: #f8f9fa;  /* Columna # de filas, headers secundarios */
+  --mr-canvas: #eaeaea;          /* Fondo estructural detrás de paneles */
+  --mr-col-selected-bg: #f1f5f4; /* Tinte sutil de celdas en la columna seleccionada */
+
+  /* Bordes */
+  --mr-border: #e0e0e0;
+  --mr-border-grid: #e5e5e5;
+  --mr-border-strong: #c8c8c8;
+
+  /* Texto */
+  --mr-text: #1f1f1f;
+  --mr-text-secondary: #424242;
+  --mr-text-muted: #616161;
+  --mr-text-disabled: #a3a3a3;
+
+  /* Acento DashCraft Teal */
+  --mr-accent: #117865;          /* Header columna activa, tab activo, badges, primario */
+  --mr-accent-hover: #0e6353;
+  --mr-accent-soft: #e6f2ef;
+  --mr-accent-text: #ffffff;
+
+  /* Selección de celda y marca secundaria */
+  --mr-cell-focus: #0066cc;
+  --mr-cell-focus-soft: rgba(0, 102, 204, 0.12);
+  --mr-brand-gold: #f2c811;
+
+  /* Estados semánticos */
+  --mr-ok: #107c10;
+  --mr-ok-soft: #dff6dd;
+  --mr-warn: #ca5010;
+  --mr-warn-soft: #fff4ce;
+  --mr-danger: #d13438;
+  --mr-danger-soft: #fde7e9;
+
+  /* Tipografía */
+  --mr-font-ui: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --mr-font-mono: "Cascadia Code", "Cascadia Mono", Consolas, "SF Mono", monospace;
+
+  /* Medidas del shell */
+  --mr-titlebar-h: 34px;
+  --mr-ribbontabs-h: 30px;
+  --mr-ribbonbody-h: 72px;
+  --mr-rail-w: 48px;
+  --mr-statusbar-h: 24px;
+  --mr-leftpane-w: 272px;
+  --mr-inspector-w: 248px;
+  --mr-rightpane-w: 268px;
+  --mr-collapsed-strip-w: 28px;
+  --mr-radius: 4px;
+  --mr-shadow-menu: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --mr-shadow-dialog: 0 8px 32px rgba(0, 0, 0, 0.18);
+}

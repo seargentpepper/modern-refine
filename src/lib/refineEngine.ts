@@ -1,15 +1,25 @@
 import type {
+  CellInferredType,
   ClusterGroup,
   ClusterMethod,
+  ColumnDataType,
   ColumnDiagnostic,
+  ColumnQualityProfile,
   DataRow,
   DateTargetFormat,
   DeletedRowEntry,
+  DuplicateSummary,
   FacetItem,
   FileIngestionMeta,
   IndexedRow,
+  NumericHistogramBin,
+  NumericRangeProfile,
+  QualityFilterKind,
   RefineStep,
+  TimelineBucket,
+  TypeDistributionItem,
 } from "../types/refine";
+import { compileFormula, evaluateFormulaAst } from "./formula/evaluator";
 
 function detectDelimiter(sampleLine: string): { char: string; label: string } {
   const candidates: Array<{ char: string; label: string }> = [
@@ -346,6 +356,57 @@ function isLikelyNumericColumn(rows: DataRow[], columnName: string): boolean {
   return nonEmpty > 0 && numHits / nonEmpty >= 0.7;
 }
 
+export const ERROR_CELL_MARKER = "#ERROR!";
+
+export function isErrorCellValue(val: string): boolean {
+  const t = val.trim();
+  if (!t) return false;
+  return /^(#ERROR!|#N\/A|#VALUE!|#REF!|#DIV\/0!|#NAME\?|#NUM!|#NULL!|Error\()/i.test(t);
+}
+
+export function hasControlOrInvisibleChars(val: string): boolean {
+  return /[\u0000-\u001F\u007F\u00A0\u200B-\u200D\uFEFF]/.test(val);
+}
+
+export function deepCleanText(val: string): string {
+  return val
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u200B-\u200D\uFEFF]/g, "")
+    .replace(/[\r\n\t\u00A0]+/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+export function parseNumericValue(raw: string): number | null {
+  const t = raw.trim();
+  if (!t || isErrorCellValue(t)) return null;
+  if (!/^\$?\s*-?[\d,]+(\.\d+)?%?$/.test(t) && !/^-?\d+(\.\d+)?$/.test(t)) return null;
+  const cleaned = t.replace(/[$,%\s]/g, "");
+  if (!cleaned || cleaned === "-" || cleaned === ".") return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseBooleanValue(raw: string): boolean | null {
+  const norm = stripDiacritics(raw.trim().toLowerCase());
+  if (["true", "verdadero", "si", "1", "yes", "v", "activo"].includes(norm)) return true;
+  if (["false", "falso", "no", "0", "f", "inactivo"].includes(norm)) return false;
+  return null;
+}
+
+export function inferCellType(raw: string, columnHintIsDate = false): CellInferredType {
+  const t = raw.trim();
+  if (!t) return "empty";
+  if (isErrorCellValue(t)) return "error";
+  if (parseBooleanValue(t) !== null && !/^\d+$/.test(t)) return "boolean";
+  if (parseNumericValue(t) !== null && !(columnHintIsDate && /^\d{5}$/.test(t))) {
+    return "number";
+  }
+  if (parseCalendarDate(t, false) !== null || (columnHintIsDate && parseCalendarDate(t, true) !== null)) {
+    return "date";
+  }
+  return "text";
+}
+
 function isSuspiciousDate(val: string): boolean {
   const trimmed = val.trim();
   if (!trimmed) return false;
@@ -356,12 +417,28 @@ function isSuspiciousDate(val: string): boolean {
   return /sin\s+fecha|fecha\s+invalida|^\d{5}$/i.test(trimmed);
 }
 
+export function classifyCellQuality(
+  val: string,
+  opts: { isDateCol: boolean; isPostalCol: boolean; dominantType: CellInferredType }
+): QualityFilterKind {
+  if (val.trim() === "") return "empty";
+  if (isErrorCellValue(val)) return "suspect";
+  if (hasControlOrInvisibleChars(val)) return "suspect";
+  if (opts.isDateCol && isSuspiciousDate(val)) return "suspect";
+  if (opts.isPostalCol && /^\d{3,4}$/.test(val.trim())) return "suspect";
+  if (opts.dominantType === "number" && inferCellType(val, false) === "text") return "suspect";
+  if (opts.dominantType === "date" && inferCellType(val, true) === "text") return "suspect";
+  return "valid";
+}
+
 export function computeColumnDiagnostic(rows: DataRow[], column: string): ColumnDiagnostic {
   const seen = new Set<string>();
   let emptyCount = 0;
   let whitespaceIssueCount = 0;
   let suspiciousDateCount = 0;
   let shortPostalCodeCount = 0;
+  let errorCount = 0;
+  let controlCharCount = 0;
   const isPostalCol = /cp|postal/i.test(column);
 
   for (const row of rows) {
@@ -370,6 +447,12 @@ export function computeColumnDiagnostic(rows: DataRow[], column: string): Column
       emptyCount++;
     } else {
       seen.add(val);
+      if (isErrorCellValue(val)) {
+        errorCount++;
+      }
+      if (hasControlOrInvisibleChars(val)) {
+        controlCharCount++;
+      }
       if (val !== val.trim() || /\s{2,}/.test(val)) {
         whitespaceIssueCount++;
       }
@@ -389,7 +472,338 @@ export function computeColumnDiagnostic(rows: DataRow[], column: string): Column
     whitespaceIssueCount,
     suspiciousDateCount,
     shortPostalCodeCount,
+    errorCount,
+    controlCharCount,
   };
+}
+
+const TYPE_LABELS: Record<CellInferredType, string> = {
+  number: "Número",
+  date: "Fecha",
+  boolean: "Booleano",
+  text: "Texto",
+  empty: "Vacío",
+  error: "Error",
+};
+
+export function computeColumnQualityProfile(
+  rows: DataRow[],
+  column: string
+): ColumnQualityProfile {
+  const totalRows = rows.length;
+  const isDateCol = isLikelyDateColumn(column, rows);
+  const isPostalCol = /cp|postal/i.test(column);
+
+  const typeCounts: Record<CellInferredType, number> = {
+    number: 0,
+    date: 0,
+    boolean: 0,
+    text: 0,
+    empty: 0,
+    error: 0,
+  };
+
+  for (const row of rows) {
+    const t = inferCellType(row[column] ?? "", isDateCol);
+    typeCounts[t]++;
+  }
+
+  let dominantType: CellInferredType = "text";
+  let bestCount = -1;
+  for (const candidate of ["number", "date", "boolean", "text"] as CellInferredType[]) {
+    if (typeCounts[candidate] > bestCount) {
+      bestCount = typeCounts[candidate];
+      dominantType = candidate;
+    }
+  }
+  const nonEmptyCount = totalRows - typeCounts.empty;
+  if (nonEmptyCount > 0 && typeCounts[dominantType] / nonEmptyCount < 0.6) {
+    dominantType = "text";
+  }
+
+  let validCount = 0;
+  let emptyCount = 0;
+  let suspectCount = 0;
+
+  for (const row of rows) {
+    const q = classifyCellQuality(row[column] ?? "", {
+      isDateCol,
+      isPostalCol,
+      dominantType,
+    });
+    if (q === "valid") validCount++;
+    else if (q === "empty") emptyCount++;
+    else suspectCount++;
+  }
+
+  const pct = (n: number) => (totalRows > 0 ? Math.round((n / totalRows) * 100) : 0);
+
+  const typeDistribution: TypeDistributionItem[] = (
+    Object.keys(typeCounts) as CellInferredType[]
+  )
+    .filter((t) => typeCounts[t] > 0)
+    .map((t) => ({
+      type: t,
+      label: TYPE_LABELS[t],
+      count: typeCounts[t],
+      percent: pct(typeCounts[t]),
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  return {
+    column,
+    totalRows,
+    validCount,
+    emptyCount,
+    suspectCount,
+    validPercent: pct(validCount),
+    emptyPercent: pct(emptyCount),
+    suspectPercent: pct(suspectCount),
+    dominantType,
+    typeDistribution,
+  };
+}
+
+export function buildColumnFrequencyMap(rows: DataRow[], column: string): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const val = row[column] ?? "";
+    if (val.trim() === "") continue;
+    counts.set(val, (counts.get(val) ?? 0) + 1);
+  }
+  return counts;
+}
+
+export function serializeRowSignature(row: DataRow, columns: string[]): string {
+  return columns.map((c) => row[c] ?? "").join("\u001F");
+}
+
+export function computeDuplicateSummary(
+  rows: DataRow[],
+  column: string,
+  columns: string[]
+): DuplicateSummary {
+  const colCounts = buildColumnFrequencyMap(rows, column);
+  const repeatedItems: Array<{ value: string; count: number }> = [];
+  let duplicateColumnRows = 0;
+
+  for (const [value, count] of colCounts.entries()) {
+    if (count > 1) {
+      repeatedItems.push({ value, count });
+      duplicateColumnRows += count - 1;
+    }
+  }
+  repeatedItems.sort((a, b) => b.count - a.count || a.value.localeCompare(b.value, "es"));
+
+  const rowSeen = new Set<string>();
+  let exactRowDuplicates = 0;
+  for (const row of rows) {
+    const sig = serializeRowSignature(row, columns);
+    if (rowSeen.has(sig)) exactRowDuplicates++;
+    else rowSeen.add(sig);
+  }
+
+  return {
+    column,
+    totalRows: rows.length,
+    uniqueNonEmptyValues: colCounts.size,
+    repeatedValueGroups: repeatedItems.length,
+    duplicateColumnRows,
+    exactRowDuplicates,
+    repeatedItems,
+  };
+}
+
+export function computeNumericRangeProfile(
+  rows: DataRow[],
+  column: string,
+  binCount = 8
+): NumericRangeProfile | null {
+  const nums: number[] = [];
+  for (const row of rows) {
+    const n = parseNumericValue(row[column] ?? "");
+    if (n !== null) nums.push(n);
+  }
+  if (nums.length === 0) return null;
+
+  const min = Math.min(...nums);
+  const max = Math.max(...nums);
+  if (min === max) {
+    return {
+      min,
+      max,
+      numericCount: nums.length,
+      bins: [{ index: 0, min, max, label: `${min}`, count: nums.length }],
+    };
+  }
+
+  const step = (max - min) / binCount;
+  const bins: NumericHistogramBin[] = Array.from({ length: binCount }, (_, idx) => {
+    const bMin = min + idx * step;
+    const bMax = idx === binCount - 1 ? max : min + (idx + 1) * step;
+    const fmt = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1));
+    return {
+      index: idx,
+      min: bMin,
+      max: bMax,
+      label: `${fmt(bMin)}–${fmt(bMax)}`,
+      count: 0,
+    };
+  });
+
+  for (const n of nums) {
+    const rawIdx = Math.floor((n - min) / step);
+    const idx = Math.min(binCount - 1, Math.max(0, rawIdx));
+    bins[idx].count++;
+  }
+
+  return { min, max, numericCount: nums.length, bins };
+}
+
+export function computeDateTimeline(rows: DataRow[], column: string): TimelineBucket[] {
+  const buckets = new Map<string, number>();
+  for (const row of rows) {
+    const raw = row[column] ?? "";
+    if (!raw.trim()) continue;
+    const parsed = parseCalendarDate(raw, true);
+    if (!parsed) {
+      buckets.set("Inválida / Sin fecha", (buckets.get("Inválida / Sin fecha") ?? 0) + 1);
+      continue;
+    }
+    const period = `${parsed.year}-${pad2(parsed.month)}`;
+    buckets.set(period, (buckets.get(period) ?? 0) + 1);
+  }
+
+  return Array.from(buckets.entries())
+    .map(([period, count]) => ({ period, count }))
+    .sort((a, b) => a.period.localeCompare(b.period));
+}
+
+export function applyReplaceValue(
+  val: string,
+  opts: {
+    find: string;
+    replace: string;
+    matchMode: "exact" | "contains" | "regex";
+    caseSensitive?: boolean;
+  }
+): string {
+  if (opts.matchMode === "exact") {
+    if (opts.caseSensitive) return val === opts.find ? opts.replace : val;
+    return val.toLowerCase() === opts.find.toLowerCase() ? opts.replace : val;
+  }
+  if (opts.matchMode === "contains") {
+    if (!opts.find) return val;
+    if (opts.caseSensitive) return val.split(opts.find).join(opts.replace);
+    const escaped = opts.find.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return val.replace(new RegExp(escaped, "gi"), opts.replace);
+  }
+  try {
+    if (!opts.find) return val;
+    const flags = opts.caseSensitive ? "g" : "gi";
+    return val.replace(new RegExp(opts.find, flags), opts.replace);
+  } catch {
+    return val;
+  }
+}
+
+export function applyExtractText(
+  val: string,
+  opts: {
+    mode: "before" | "after" | "between" | "first_n" | "last_n";
+    delimiter?: string;
+    endDelimiter?: string;
+    count?: number;
+  }
+): string {
+  const delim = opts.delimiter ?? "";
+  const n = Math.max(0, Math.floor(opts.count ?? 0));
+  switch (opts.mode) {
+    case "before": {
+      if (!delim) return val;
+      const idx = val.indexOf(delim);
+      return idx === -1 ? val : val.slice(0, idx);
+    }
+    case "after": {
+      if (!delim) return val;
+      const idx = val.indexOf(delim);
+      return idx === -1 ? "" : val.slice(idx + delim.length);
+    }
+    case "between": {
+      const endDelim = opts.endDelimiter ?? delim;
+      if (!delim || !endDelim) return "";
+      const start = val.indexOf(delim);
+      if (start === -1) return "";
+      const from = start + delim.length;
+      const end = val.indexOf(endDelim, from);
+      return end === -1 ? "" : val.slice(from, end);
+    }
+    case "first_n":
+      return val.slice(0, n);
+    case "last_n":
+      return n === 0 ? "" : val.slice(-n);
+  }
+}
+
+export function splitFlexibleParts(
+  val: string,
+  opts: { mode: "delimiter" | "length"; delimiter?: string; maxParts?: number; length?: number }
+): string[] {
+  if (opts.mode === "length") {
+    const chunkLen = Math.max(1, Math.floor(opts.length ?? 2));
+    const parts: string[] = [];
+    for (let i = 0; i < val.length; i += chunkLen) {
+      parts.push(val.slice(i, i + chunkLen));
+    }
+    return parts.length > 0 ? parts : [""];
+  }
+  const sep = opts.delimiter ?? ",";
+  if (!sep) return [val];
+  const rawParts = val.split(sep);
+  const limit = Math.max(2, Math.floor(opts.maxParts ?? rawParts.length));
+  if (rawParts.length <= limit) return rawParts.map((p) => p.trim());
+  const head = rawParts.slice(0, limit - 1).map((p) => p.trim());
+  const tail = rawParts.slice(limit - 1).join(sep).trim();
+  return [...head, tail];
+}
+
+export function applyCastColumnValue(
+  raw: string,
+  targetType: ColumnDataType,
+  onError: "mark" | "null" | "keep"
+): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  if (isErrorCellValue(trimmed)) {
+    if (onError === "null") return "";
+    if (onError === "keep") return raw;
+    return ERROR_CELL_MARKER;
+  }
+
+  switch (targetType) {
+    case "text":
+      return raw;
+    case "integer": {
+      const n = parseNumericValue(trimmed);
+      if (n !== null) return String(Math.round(n));
+      return onError === "null" ? "" : onError === "keep" ? raw : ERROR_CELL_MARKER;
+    }
+    case "decimal": {
+      const n = parseNumericValue(trimmed);
+      if (n !== null) return String(n);
+      return onError === "null" ? "" : onError === "keep" ? raw : ERROR_CELL_MARKER;
+    }
+    case "date": {
+      const parsed = parseCalendarDate(trimmed, false);
+      if (parsed) return `${parsed.year}-${pad2(parsed.month)}-${pad2(parsed.day)}`;
+      return onError === "null" ? "" : onError === "keep" ? raw : ERROR_CELL_MARKER;
+    }
+    case "boolean": {
+      const b = parseBooleanValue(trimmed);
+      if (b !== null) return b ? "TRUE" : "FALSE";
+      return onError === "null" ? "" : onError === "keep" ? raw : ERROR_CELL_MARKER;
+    }
+  }
 }
 
 export function computeFacets(rows: DataRow[], column: string): FacetItem[] {
@@ -592,11 +1006,11 @@ export function computeClusters(rows: DataRow[], column: string): ClusterGroup[]
   return result;
 }
 
-function toTitleCase(input: string): string {
+export function toTitleCase(input: string): string {
   return input.toLowerCase().replace(/(^|\s)\S/g, (char) => char.toUpperCase());
 }
 
-function extractCleanNumber(val: string): string {
+export function extractCleanNumber(val: string): string {
   const trimmed = val.trim();
   if (!trimmed) return "";
   if (/^\$?\s*-?[\d,]+(\.\d+)?$/.test(trimmed)) {
@@ -605,7 +1019,7 @@ function extractCleanNumber(val: string): string {
   return trimmed.replace(/\D+/g, "");
 }
 
-function padMexicanPostalCode(val: string): string {
+export function padMexicanPostalCode(val: string): string {
   const digits = val.replace(/\D+/g, "");
   if (!digits) return val;
   return digits.length <= 5 ? digits.padStart(5, "0") : digits.slice(0, 5);
@@ -939,6 +1353,38 @@ export function replayRecipeWithTrash(
       continue;
     }
 
+    if (kind === "formula") {
+      const expr = String(params?.expression ?? "").trim();
+      if (!expr) continue;
+      const mode = params?.mode === "new_column" ? "new_column" : "replace";
+      const requestedTarget = String(params?.targetColumn ?? column).trim() || column;
+      try {
+        const ast = compileFormula(expr, columns);
+        let finalTarget = requestedTarget;
+        if (mode === "new_column" || !columns.includes(requestedTarget)) {
+          finalTarget = uniqueColName(columns, requestedTarget);
+          const colIdx = columns.indexOf(column);
+          columns =
+            colIdx >= 0
+              ? [...columns.slice(0, colIdx + 1), finalTarget, ...columns.slice(colIdx + 1)]
+              : [...columns, finalTarget];
+        }
+        activeRows = activeRows.map((item) => {
+          const val = evaluateFormulaAst(ast, item.data);
+          return {
+            ...item,
+            data: {
+              ...item.data,
+              [finalTarget]: val === null || val === undefined ? "" : String(val),
+            },
+          };
+        });
+      } catch {
+        // Si una fórmula falla en replay, no borra ni rompe la receta; se omite con seguridad
+      }
+      continue;
+    }
+
     if (kind === "delete_row") {
       const targetOrigIdx = Number(params?.origIdx ?? params?.rowIndex ?? -1);
       const nextActive: IndexedRow[] = [];
@@ -994,6 +1440,45 @@ export function replayRecipeWithTrash(
       continue;
     }
 
+    if (kind === "add_row") {
+      const maxOrig = Math.max(
+        -1,
+        ...activeRows.map((r) => r.origIdx),
+        ...trash.map((t) => t.origIdx)
+      );
+      const emptyData: DataRow = {};
+      for (const c of columns) emptyData[c] = "";
+      activeRows = [...activeRows, { origIdx: maxOrig + 1, data: emptyData }];
+      continue;
+    }
+
+    if (kind === "add_column") {
+      const desired = String(params?.newColumnName ?? "").trim() || `Columna_${columns.length + 1}`;
+      const targetCol = uniqueColName(columns, desired);
+      columns = [...columns, targetCol];
+      activeRows = activeRows.map((item) => ({
+        ...item,
+        data: { ...item.data, [targetCol]: "" },
+      }));
+      continue;
+    }
+
+    if (kind === "computed_column") {
+      const desired = String(params?.targetColumn ?? `${column}_DuckDB`).trim() || `${column}_DuckDB`;
+      const targetCol = uniqueColName(columns, desired);
+      const values = (params?.values as string[] | undefined) ?? [];
+      const colIdx = columns.indexOf(column);
+      columns =
+        colIdx >= 0
+          ? [...columns.slice(0, colIdx + 1), targetCol, ...columns.slice(colIdx + 1)]
+          : [...columns, targetCol];
+      activeRows = activeRows.map((item, idx) => ({
+        ...item,
+        data: { ...item.data, [targetCol]: values[idx] ?? "" },
+      }));
+      continue;
+    }
+
     if (kind === "edit_cell") {
       const targetOrigIdx = Number(params?.origIdx ?? params?.rowIndex ?? -1);
       const nextValue = String(params?.newValue ?? "");
@@ -1002,6 +1487,214 @@ export function replayRecipeWithTrash(
           ? { ...item, data: { ...item.data, [column]: nextValue } }
           : item
       );
+      continue;
+    }
+
+    if (kind === "promote_headers") {
+      if (activeRows.length === 0) continue;
+      const requestedOrigIdx =
+        params?.rowOrigIdx !== undefined ? Number(params.rowOrigIdx) : activeRows[0].origIdx;
+      const headerRowIdx = activeRows.findIndex((r) => r.origIdx === requestedOrigIdx);
+      const chosenIdx = headerRowIdx >= 0 ? headerRowIdx : 0;
+      const headerRow = activeRows[chosenIdx];
+
+      const newColumns: string[] = [];
+      const oldToNew = new Map<string, string>();
+      columns.forEach((oldCol, idx) => {
+        const rawCandidate = (headerRow.data[oldCol] ?? "").trim() || `Columna_${idx + 1}`;
+        const unique = uniqueColName(newColumns, rawCandidate);
+        newColumns.push(unique);
+        oldToNew.set(oldCol, unique);
+      });
+
+      trash.push({
+        origIdx: headerRow.origIdx,
+        data: headerRow.data,
+        stepId: step.id,
+        reason: step.label,
+      });
+
+      columns = newColumns;
+      activeRows = activeRows
+        .filter((_, idx) => idx !== chosenIdx)
+        .map((item) => {
+          const nextData: DataRow = {};
+          for (const [oldCol, newCol] of oldToNew.entries()) {
+            nextData[newCol] = item.data[oldCol] ?? "";
+          }
+          return { ...item, data: nextData };
+        });
+      continue;
+    }
+
+    if (kind === "remove_duplicates") {
+      const scope = params?.scope === "row" ? "row" : "column";
+      const keep = params?.keep === "last" ? "last" : "first";
+      const getKey = (item: IndexedRow): string =>
+        scope === "row" ? serializeRowSignature(item.data, columns) : item.data[column] ?? "";
+
+      const seen = new Set<string>();
+      const keptFlags = new Array<boolean>(activeRows.length).fill(true);
+
+      if (keep === "first") {
+        for (let i = 0; i < activeRows.length; i++) {
+          const k = getKey(activeRows[i]);
+          if (scope === "column" && k.trim() === "") continue;
+          if (seen.has(k)) keptFlags[i] = false;
+          else seen.add(k);
+        }
+      } else {
+        for (let i = activeRows.length - 1; i >= 0; i--) {
+          const k = getKey(activeRows[i]);
+          if (scope === "column" && k.trim() === "") continue;
+          if (seen.has(k)) keptFlags[i] = false;
+          else seen.add(k);
+        }
+      }
+
+      const nextActive: IndexedRow[] = [];
+      for (let i = 0; i < activeRows.length; i++) {
+        if (keptFlags[i]) {
+          nextActive.push(activeRows[i]);
+        } else {
+          trash.push({
+            origIdx: activeRows[i].origIdx,
+            data: activeRows[i].data,
+            stepId: step.id,
+            reason: step.label,
+          });
+        }
+      }
+      activeRows = nextActive;
+      continue;
+    }
+
+    if (kind === "remove_error_rows") {
+      const nextActive: IndexedRow[] = [];
+      for (const item of activeRows) {
+        if (isErrorCellValue(item.data[column] ?? "")) {
+          trash.push({
+            origIdx: item.origIdx,
+            data: item.data,
+            stepId: step.id,
+            reason: step.label,
+          });
+        } else {
+          nextActive.push(item);
+        }
+      }
+      activeRows = nextActive;
+      continue;
+    }
+
+    if (kind === "split_column_flexible") {
+      const colIdx = columns.indexOf(column);
+      if (colIdx === -1) continue;
+      const mode = params?.mode === "length" ? "length" : "delimiter";
+      const delimiter = String(params?.delimiter ?? ",");
+      const maxParts = params?.maxParts !== undefined ? Number(params.maxParts) : undefined;
+      const length = params?.length !== undefined ? Number(params.length) : 4;
+
+      const splitMatrix = activeRows.map((item) =>
+        splitFlexibleParts(item.data[column] ?? "", { mode, delimiter, maxParts, length })
+      );
+      const numCols = Math.max(1, ...splitMatrix.map((parts) => parts.length));
+      const newColNames: string[] = [];
+      for (let p = 0; p < numCols; p++) {
+        const nextName = uniqueColName([...columns, ...newColNames], `${column}_${p + 1}`);
+        newColNames.push(nextName);
+      }
+
+      columns = [
+        ...columns.slice(0, colIdx + 1),
+        ...newColNames,
+        ...columns.slice(colIdx + 1),
+      ];
+
+      activeRows = activeRows.map((item, rIdx) => {
+        const parts = splitMatrix[rIdx];
+        const nextData: DataRow = { ...item.data };
+        newColNames.forEach((colName, pIdx) => {
+          nextData[colName] = parts[pIdx] ?? "";
+        });
+        return { ...item, data: nextData };
+      });
+      continue;
+    }
+
+    if (kind === "merge_columns") {
+      const sourceCols = ((params?.sourceColumns as string[] | undefined) ?? []).filter((c) =>
+        columns.includes(c)
+      );
+      if (sourceCols.length < 2) continue;
+      const separator = String(params?.separator ?? " ");
+      const desiredTarget = String(params?.targetColumn ?? "").trim() || sourceCols.join("_");
+      const targetCol = uniqueColName(columns, desiredTarget);
+      const hideSources = Boolean(params?.hideSources);
+
+      const insertAfter = Math.max(...sourceCols.map((c) => columns.indexOf(c)));
+      let nextColumns = [
+        ...columns.slice(0, insertAfter + 1),
+        targetCol,
+        ...columns.slice(insertAfter + 1),
+      ];
+
+      if (hideSources) {
+        const toHide = sourceCols.filter((c) => nextColumns.length > 1 && c !== targetCol);
+        for (const c of toHide) {
+          if (nextColumns.length > 1) {
+            nextColumns = nextColumns.filter((col) => col !== c);
+            if (!hiddenColumns.includes(c)) hiddenColumns.push(c);
+          }
+        }
+      }
+
+      columns = nextColumns;
+      activeRows = activeRows.map((item) => {
+        const joined = sourceCols
+          .map((c) => (item.data[c] ?? "").trim())
+          .filter((v) => v !== "")
+          .join(separator);
+        return {
+          ...item,
+          data: { ...item.data, [targetCol]: joined },
+        };
+      });
+      continue;
+    }
+
+    if (kind === "unpivot_columns") {
+      const colsToUnpivot = ((params?.columnsToUnpivot as string[] | undefined) ?? []).filter((c) =>
+        columns.includes(c)
+      );
+      if (colsToUnpivot.length === 0) continue;
+      const keepCols = columns.filter((c) => !colsToUnpivot.includes(c));
+      const attrCol = uniqueColName(
+        keepCols,
+        String(params?.attributeColumn ?? "Atributo").trim() || "Atributo"
+      );
+      const valCol = uniqueColName(
+        [...keepCols, attrCol],
+        String(params?.valueColumn ?? "Valor").trim() || "Valor"
+      );
+
+      columns = [...keepCols, attrCol, valCol];
+      const nextRows: IndexedRow[] = [];
+      for (const item of activeRows) {
+        colsToUnpivot.forEach((uCol, uIdx) => {
+          const nextData: DataRow = {};
+          for (const k of keepCols) {
+            nextData[k] = item.data[k] ?? "";
+          }
+          nextData[attrCol] = uCol;
+          nextData[valCol] = item.data[uCol] ?? "";
+          nextRows.push({
+            origIdx: item.origIdx * Math.max(100, colsToUnpivot.length) + uIdx,
+            data: nextData,
+          });
+        });
+      }
+      activeRows = nextRows;
       continue;
     }
 
@@ -1018,12 +1711,34 @@ export function replayRecipeWithTrash(
       continue;
     }
 
+    if (kind === "fill_up") {
+      let nextValid = "";
+      const nextList = new Array<IndexedRow>(activeRows.length);
+      for (let i = activeRows.length - 1; i >= 0; i--) {
+        const item = activeRows[i];
+        const val = item.data[column] ?? "";
+        if (val.trim() !== "") {
+          nextValid = val;
+          nextList[i] = item;
+        } else {
+          nextList[i] = nextValid
+            ? { ...item, data: { ...item.data, [column]: nextValid } }
+            : item;
+        }
+      }
+      activeRows = nextList;
+      continue;
+    }
+
     activeRows = activeRows.map((item) => {
       const val = item.data[column] ?? "";
       let next = val;
       switch (kind) {
         case "trim":
           next = val.trim().replace(/\s{2,}/g, " ");
+          break;
+        case "clean_deep":
+          next = deepCleanText(val);
           break;
         case "title_case":
           next = toTitleCase(val);
@@ -1055,6 +1770,38 @@ export function replayRecipeWithTrash(
           next = (parts.length > 1 ? parts.slice(1).join(sep) : val).trim();
           break;
         }
+        case "extract_text":
+          next = applyExtractText(val, {
+            mode:
+              (params?.mode as "before" | "after" | "between" | "first_n" | "last_n") ??
+              "before",
+            delimiter: params?.delimiter !== undefined ? String(params.delimiter) : undefined,
+            endDelimiter:
+              params?.endDelimiter !== undefined ? String(params.endDelimiter) : undefined,
+            count: params?.count !== undefined ? Number(params.count) : undefined,
+          });
+          break;
+        case "replace_value":
+          next = applyReplaceValue(val, {
+            find: String(params?.find ?? ""),
+            replace: String(params?.replace ?? ""),
+            matchMode:
+              (params?.matchMode as "exact" | "contains" | "regex") ?? "contains",
+            caseSensitive: Boolean(params?.caseSensitive),
+          });
+          break;
+        case "replace_errors":
+          if (isErrorCellValue(val)) {
+            next = String(params?.replacement ?? "");
+          }
+          break;
+        case "cast_column_type":
+          next = applyCastColumnValue(
+            val,
+            (params?.targetType as ColumnDataType) ?? "text",
+            (params?.onError as "mark" | "null" | "keep") ?? "mark"
+          );
+          break;
         case "standardize_dates":
           next = standardizeDateValue(val, (params?.format as DateTargetFormat) ?? "iso");
           break;
